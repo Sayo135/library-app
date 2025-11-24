@@ -63,11 +63,20 @@ const j = await res.json();
 let authors = [];
 if (j.authors?.length > 0) {
 const ares = await fetch(https://openlibrary.org${j.authors[0].key}.json);
-if (ares.ok) { const aj = await ares.json(); authors = [aj.name]; }
+if (ares.ok) {
+const aj = await ares.json();
+authors = [aj.name];
+}
 }
 let image = "";
 if (j.covers?.length > 0) image = https://covers.openlibrary.org/b/id/${j.covers[0]}-L.jpg;
-return { title: j.title || "", authors, publisher: j.publishers?.join(",") || "", pubdate: j.publish_date || "", image };
+return {
+title: j.title || "",
+authors,
+publisher: j.publishers?.join(",") || "",
+pubdate: j.publish_date || "",
+image,
+};
 } catch { return null; }
 }
 
@@ -108,7 +117,13 @@ image: b.image?.value || "",
 }
 
 async function fetchBookInfo(isbn) {
-return (await fetchOpenBD(isbn)) || (await fetchOpenLibrary(isbn)) || (await fetchNDL(isbn)) || (await fetchWikidata(isbn)) || { title: "", authors: [], publisher: "", pubdate: "", image: "" };
+return (
+(await fetchOpenBD(isbn)) ||
+(await fetchOpenLibrary(isbn)) ||
+(await fetchNDL(isbn)) ||
+(await fetchWikidata(isbn)) ||
+{ title: "", authors: [], publisher: "", pubdate: "", image: "" }
+);
 }
 
 export default function BookScannerPage() {
@@ -122,11 +137,20 @@ const html5QrcodeRef = useRef(null);
 const lastScannedRef = useRef({});
 const scannedISBNsRef = useRef(new Set());
 
-useEffect(() => { (async () => { const data = await fetchBooksFromSupabase(); setBooks(data); setMsg("スキャンできます"); })(); }, []);
-useEffect(() => { if (books.length) saveBooksToSupabase(books); }, [books]);
+useEffect(() => {
+(async () => {
+const data = await fetchBooksFromSupabase();
+setBooks(data);
+setMsg("スキャンできます");
+})();
+}, []);
 
-const playBeep = () => { try { const audio = new Audio("/beep.mp3"); audio.play(); } catch {} };
-const playBuzzer = () => { try { const audio = new Audio("/buzzer.mp3"); audio.play(); } catch {} };
+useEffect(() => {
+if (books.length) saveBooksToSupabase(books);
+}, [books]);
+
+const playBeep = () => { try { new Audio("/beep.mp3").play(); } catch {} };
+const playBuzzer = () => { try { new Audio("/buzzer.mp3").play(); } catch {} };
 
 async function handleISBN(isbn) {
 const now = Date.now();
@@ -154,13 +178,18 @@ await html5QrcodeRef.current.start(
 
 async function stopScan() {
 setScanning(false);
-if (html5QrcodeRef.current) { await html5QrcodeRef.current.stop(); html5QrcodeRef.current.clear(); }
+if (html5QrcodeRef.current) {
+await html5QrcodeRef.current.stop();
+html5QrcodeRef.current.clear();
+}
 }
 
 const filteredBooks = () => {
 const t = searchText.trim();
 if (!t) return books;
-return books.filter((b) => (b.title + b.publisher + b.isbn + b.authors.join(",") + (b.shelf || "")).includes(t));
+return books.filter((b) =>
+(b.title + b.publisher + b.isbn + b.authors.join(",") + (b.shelf || "")).includes(t)
+);
 };
 
 return (
@@ -172,24 +201,29 @@ return (
 <button onClick={stopScan} disabled={!scanning}>停止</button>
 </div>
 <div id="reader" style={{ width: "100%", height: 300, marginTop: 10 }}></div>
-<h2>ISBN 手入力（13桁）</h2>
-<input value={isbnInput} onChange={(e) => setIsbnInput(e.target.value)} style={{ width: 200 }} />
-<button onClick={() => { if (/^97[89]\d{10}$/.test(isbnInput)) handleISBN(isbnInput); }}>手動登録</button>
-<h2>検索</h2>
-<input value={searchText} onChange={(e) => setSearchText(e.target.value)} style={{ width: "50%" }} />
-<h2>登録一覧（{filteredBooks().length}件）</h2>
-{filteredBooks().map((b, i) => (
-<div key={i} style={{ border: "1px solid #ccc", padding: 10, marginBottom: 10, background: b.duplicate ? "#fee" : "#fff", color: b.duplicate ? "red" : "black" }}>
-<div>書名: <input value={b.title} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,title:e.target.value}:x))} /></div>
-<div>著者: <input value={b.authors.join(", ")} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,authors:e.target.value.split(",").map(s=>s.trim())}:x))} /></div>
-<div>出版社: <input value={b.publisher} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,publisher:e.target.value}:x))} /></div>
-<div>発行日: <input value={b.pubdate} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,pubdate:e.target.value}:x))} /></div>
-<div>ISBN: {b.isbn}</div>
-<div>本棚: <input value={b.shelf||""} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,shelf:e.target.value}:x))} /></div>
-<div>{b.image?<img src={b.image} alt="cover" style={{ width:120, marginTop:6, border:"1px solid #888", background:"#fafafa" }} />:<span style={{ color:"#888", fontStyle:"italic" }}>書影なし</span>}</div>
-<button onClick={() => setBooks((prev) => prev.filter((_, idx) => idx!==i))} style={{ marginTop:6 }}>削除</button>
+
+  <h2>ISBN 手入力（13桁）</h2>
+  <input value={isbnInput} onChange={(e) => setIsbnInput(e.target.value)} style={{ width: 200 }} />
+  <button onClick={() => { if (/^97[89]\d{10}$/.test(isbnInput)) handleISBN(isbnInput); }}>手動登録</button>
+
+  <h2>検索</h2>
+  <input value={searchText} onChange={(e) => setSearchText(e.target.value)} style={{ width: "50%" }} />
+
+  <h2>登録一覧（{filteredBooks().length}件）</h2>
+  {filteredBooks().map((b, i) => (
+    <div key={i} style={{ border: "1px solid #ccc", padding: 10, marginBottom: 10, background: b.duplicate ? "#fee" : "#fff", color: b.duplicate ? "red" : "black" }}>
+      <div>書名: <input value={b.title} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,title:e.target.value}:x))} /></div>
+      <div>著者: <input value={b.authors.join(", ")} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,authors:e.target.value.split(",").map(s=>s.trim())}:x))} /></div>
+      <div>出版社: <input value={b.publisher} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,publisher:e.target.value}:x))} /></div>
+      <div>発行日: <input value={b.pubdate} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,pubdate:e.target.value}:x))} /></div>
+      <div>ISBN: {b.isbn}</div>
+      <div>本棚: <input value={b.shelf||""} onChange={(e) => setBooks((prev) => prev.map((x, idx) => idx===i?{...x,shelf:e.target.value}:x))} /></div>
+      <div>{b.image ? <img src={b.image} alt="cover" style={{ width:120, marginTop:6, border:"1px solid #888", background:"#fafafa" }} /> : <span style={{ color:"#888", fontStyle:"italic" }}>書影なし</span>}</div>
+      <button onClick={() => setBooks((prev) => prev.filter((_, idx) => idx!==i))} style={{ marginTop:6 }}>削除</button>
+    </div>
+  ))}
 </div>
-))}
-</div>
+
+
 );
 }
