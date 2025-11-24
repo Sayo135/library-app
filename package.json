@@ -15,15 +15,18 @@
     "@zxing/library": "^0.21.3",
     "html5-qrcode": "^2.3.8",
     "ndarray-pixels": "^5.0.1",
-    "next": "16.0.3",
+    "next": "^13.5.8",
     "quagga": "^0.12.1",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "react-qr-barcode-scanner": "^2.1.19"
   },
   "devDependencies": {
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
-    "eslint-config-next": "16.0.3"
+    "eslint-config-next": "^13.5.8"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
