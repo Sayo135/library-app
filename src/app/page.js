@@ -9,24 +9,37 @@ const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co";
 const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Supabase操作関数
-async function fetchBooks() {
+// Supabase: books テーブル取得
+async function fetchBooksFromSupabase() {
   const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
   if (error) return [];
   return data || [];
 }
 
-async function upsertBook(book) {
-  const { error } = await supabase.from("books").upsert([book], { onConflict: ["isbn"] });
+// Supabase: books テーブル保存（Upsert）
+async function saveBooksToSupabase(books) {
+  const rows = books.map((b) => ({
+    isbn: b.isbn,
+    title: b.title,
+    authors: b.authors,
+    publisher: b.publisher,
+    pubdate: b.pubdate,
+    image: b.image,
+    shelf: b.shelf,
+    duplicate: b.duplicate || false,
+    created_at: b.created_at || new Date().toISOString()
+  }));
+  const { error } = await supabase.from("books").upsert(rows, { onConflict: ["isbn"] });
   return !error;
 }
 
-async function deleteBook(isbn) {
+// Supabase: 本削除
+async function deleteBookFromSupabase(isbn) {
   const { error } = await supabase.from("books").delete().eq("isbn", isbn);
   return !error;
 }
 
-// OpenBD取得
+// OpenBD から書誌情報取得
 async function fetchOpenBD(isbn) {
   try {
     const res = await fetch("https://api.openbd.jp/v1/get?isbn=" + isbn);
@@ -46,7 +59,7 @@ async function fetchOpenBD(isbn) {
   }
 }
 
-// Wikidata取得
+// Wikidata から出版社・画像取得
 async function fetchWikidata(isbn) {
   try {
     const query = `
@@ -72,7 +85,7 @@ async function fetchWikidata(isbn) {
   }
 }
 
-// API統合
+// APIを順に試す
 async function fetchBookInfo(isbn) {
   let info = await fetchOpenBD(isbn);
   const wd = await fetchWikidata(isbn);
@@ -84,7 +97,7 @@ async function fetchBookInfo(isbn) {
   return info;
 }
 
-// UI
+// UI 本体
 export default function Home() {
   const [isbn, setIsbn] = useState("");
   const [books, setBooks] = useState([]);
@@ -93,15 +106,17 @@ export default function Home() {
   const videoRef = useRef(null);
   const codeReader = useRef(null);
   const beepRef = useRef(null);
+  const buzzerRef = useRef(null);
 
   useEffect(() => {
     loadBooks();
     codeReader.current = new BrowserMultiFormatReader();
-    return () => stopScan();
+    startScan(); // 起動時に連続スキャン開始
+    return () => { stopScan(); };
   }, []);
 
   async function loadBooks() {
-    const data = await fetchBooks();
+    const data = await fetchBooksFromSupabase();
     setBooks(data);
   }
 
@@ -111,112 +126,103 @@ export default function Home() {
     try {
       const videoElement = videoRef.current;
       if (!videoElement) return;
-      const constraints = {
-        video: { facingMode: /iPhone|Android/.test(navigator.userAgent) ? "environment" : undefined }
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      videoElement.srcObject = stream;
-      videoElement.play();
-
-      codeReader.current.decodeFromVideoDevice(undefined, videoElement, (result, err) => {
+      await codeReader.current.decodeFromVideoDevice(null, videoElement, async (result, err) => {
         if (result) {
           const text = result.getText();
           if (text.startsWith("978") && text.length === 13) {
             setIsbn(text);
-            stopScan();
-            searchAndSave(text);
+            await searchAndSave(text);
           }
+        }
+        if (err) {
+          // 継続して読み取り可能
         }
       });
     } catch (err) {
-      console.error(err);
-      alert("カメラの起動に失敗しました: " + err.message);
-      setScanning(false);
+      console.error("カメラ起動失敗:", err);
+      alert("カメラの起動に失敗しました。許可やカメラが利用可能か確認してください。");
     }
   }
 
   async function stopScan() {
     if (codeReader.current) {
       try { await codeReader.current.reset(); } catch {}
-      const videoElement = videoRef.current;
-      if (videoElement && videoElement.srcObject) {
-        videoElement.srcObject.getTracks().forEach(track => track.stop());
-        videoElement.srcObject = null;
-      }
       setScanning(false);
     }
   }
 
   async function searchAndSave(inputIsbn) {
-    let info = await fetchBookInfo(inputIsbn);
+    const info = await fetchBookInfo(inputIsbn);
     const exists = books.find(b => b.isbn === inputIsbn);
     const newBook = {
       isbn: inputIsbn,
-      title: info.title,
-      authors: info.authors,
-      publisher: info.publisher,
-      pubdate: info.pubdate,
-      image: info.image,
+      title: info.title || "(書名なし)",
+      authors: info.authors.length ? info.authors : ["(著者なし)"],
+      publisher: info.publisher || "(出版社なし)",
+      pubdate: info.pubdate || "(出版日なし)",
+      image: info.image || "",
       shelf: exists?.shelf || "",
       duplicate: exists ? true : false,
       created_at: new Date().toISOString()
     };
-    const ok = await upsertBook(newBook);
-    if (ok) loadBooks();
-    if (exists && beepRef.current) beepRef.current.play();
-  }
-
-  async function handleDelete(isbn) {
-    if (confirm("本当に削除しますか？")) {
-      const ok = await deleteBook(isbn);
-      if (ok) loadBooks();
-      else alert("削除に失敗しました");
+    const ok = await saveBooksToSupabase([newBook]);
+    if (ok) {
+      loadBooks();
+      if (exists) {
+        buzzerRef.current.play();
+      } else {
+        beepRef.current.play();
+      }
+    } else {
+      alert("保存に失敗しました");
     }
   }
 
-  async function handleEdit(b, key, value) {
-    const updated = { ...b, [key]: value };
-    await upsertBook(updated);
-    loadBooks();
+  async function deleteBook(isbn) {
+    const ok = await deleteBookFromSupabase(isbn);
+    if (ok) loadBooks();
   }
 
   const filteredBooks = books.filter(b => !searchShelf || (b.shelf && b.shelf.includes(searchShelf)));
 
   return (
     <div style={{ padding: 20 }}>
-      <audio ref={beepRef} src="/beep.mp3" />
+      <audio ref={beepRef} src="/beep.mp3" preload="auto" />
+      <audio ref={buzzerRef} src="/buzzer.mp3" preload="auto" />
       <h2>蔵書管理アプリ</h2>
 
       <div style={{ width: "100%", maxHeight: "40vh", overflow: "hidden", marginBottom: 10 }}>
         <video ref={videoRef} style={{ width: "100%" }} />
       </div>
-      {!scanning && <button onClick={startScan}>カメラでISBNを読み取る</button>}
-      {scanning && <button onClick={stopScan}>カメラ停止</button>}
 
-      <input placeholder="ISBN手入力" value={isbn} onChange={e => setIsbn(e.target.value)} />
-      <input placeholder="本棚検索" value={searchShelf} onChange={e => setSearchShelf(e.target.value)} />
-      <button onClick={() => searchAndSave(isbn)}>書誌取得して保存</button>
+      <div>
+        <input
+          type="text"
+          value={isbn}
+          readOnly
+          style={{ width: "100%", padding: 10, marginTop: 10 }}
+        />
+      </div>
 
-      <h3>保存済みの本</h3>
+      <input
+        type="text"
+        placeholder="本棚検索"
+        value={searchShelf}
+        onChange={e => setSearchShelf(e.target.value)}
+        style={{ width: "100%", padding: 10, marginTop: 10 }}
+      />
+
+      <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
       {filteredBooks.map(b => (
-        <div key={b.isbn} style={{ marginBottom: 20, border: "1px solid #ccc", padding: 10, color: b.duplicate ? "red" : "black" }}>
-          {b.image && <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block" }} />}
-          <div>
-            <input value={b.title} onChange={e => handleEdit(b, "title", e.target.value)} placeholder="タイトル" />
-          </div>
-          <div>
-            <input value={b.authors.join(", ")} onChange={e => handleEdit(b, "authors", e.target.value.split(","))} placeholder="著者" />
-          </div>
-          <div>
-            <input value={b.publisher} onChange={e => handleEdit(b, "publisher", e.target.value)} placeholder="出版社" />
-          </div>
-          <div>
-            <input value={b.pubdate} onChange={e => handleEdit(b, "pubdate", e.target.value)} placeholder="出版日" />
-          </div>
-          <div>
-            <input value={b.shelf} onChange={e => handleEdit(b, "shelf", e.target.value)} placeholder="本棚" />
-          </div>
-          <button onClick={() => handleDelete(b.isbn)}>削除</button>
+        <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black", border: "1px solid #ccc", padding: 10 }}>
+          {b.image ? <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} /> : <div>(書影なし)</div>}
+          <div>ISBN: {b.isbn}</div>
+          <div>タイトル: {b.title}</div>
+          <div>著者: {b.authors.join(", ")}</div>
+          <div>出版社: {b.publisher}</div>
+          <div>出版日: {b.pubdate}</div>
+          <div>本棚: {b.shelf}</div>
+          <button onClick={() => deleteBook(b.isbn)} style={{ marginTop: 5 }}>削除</button>
         </div>
       ))}
     </div>
