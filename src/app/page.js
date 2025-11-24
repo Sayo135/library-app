@@ -1,46 +1,42 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Html5Qrcode } from "html5-qrcode";
 import { createClient } from "@supabase/supabase-js";
 
-// Supabaseクライアントはビルド/サーバー側で即生成すると環境変数が未設定でエラーになるため
-// ブラウザ実行時に遅延生成するヘルパを使います。
-function getSupabaseClient() {
-  if (typeof window === "undefined") return null;
-  if (!window.__supabase) {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://sumqfcjvndnpuoirpkrb.supabase.co";
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
-    window.__supabase = createClient(supabaseUrl, supabaseKey);
-  }
-  return window.__supabase;
-}
+// Supabase設定（あなたの環境）
+const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co";
+const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Supabase: booksテーブルから取得
 async function fetchBooksFromSupabase() {
-  const supabase = getSupabaseClient();
-  if (!supabase) return [];
-  const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase
+    .from("books")
+    .select("*")
+    .order("created_at", { ascending: false });
+
   if (error) return [];
   return data || [];
 }
 
-// Supabase: booksテーブルに保存（Upsert）
+// Supabase: booksテーブルに保存
 async function saveBooksToSupabase(books) {
-const rows = books.map((b) => ({
-isbn: b.isbn,
-title: b.title,
-authors: b.authors,
-publisher: b.publisher,
-pubdate: b.pubdate,
-image: b.image,
-shelf: b.shelf,
-duplicate: b.duplicate || false,
-created_at: b.created_at || new Date().toISOString(),
-}));
-  const supabase = getSupabaseClient();
-  if (!supabase) return false;
-  const { error } = await supabase.from("books").upsert(rows, { onConflict: ["isbn"] });
+  const rows = books.map((b) => ({
+    isbn: b.isbn,
+    title: b.title,
+    authors: b.authors,
+    publisher: b.publisher,
+    pubdate: b.pubdate,
+    image: b.image,
+    shelf: b.shelf,
+    duplicate: b.duplicate || false,
+    created_at: b.created_at || new Date().toISOString(),
+  }));
+
+  const { error } = await supabase.from("books").upsert(rows, {
+    onConflict: ["isbn"],
+  });
+
   return !error;
 }
 
@@ -48,294 +44,270 @@ created_at: b.created_at || new Date().toISOString(),
 async function fetchOpenBD(isbn) {
   try {
     const res = await fetch("https://api.openbd.jp/v1/get?isbn=" + isbn);
-if (!res.ok) return null;
-const j = await res.json();
-if (!j || !j[0] || !j[0].summary) return null;
-const s = j[0].summary;
-return {
-title: s.title || "",
-authors: s.author ? s.author.split(",") : [],
-publisher: s.publisher || "",
-pubdate: s.pubdate || "",
-image: s.cover || ""
-};
-} catch {
-return null;
-}
+    if (!res.ok) return null;
+
+    const j = await res.json();
+
+    if (!j || !j[0] || !j[0].summary) return null;
+    const s = j[0].summary;
+
+    return {
+      title: s.title || "",
+      authors: s.author ? s.author.split(",") : [],
+      publisher: s.publisher || "",
+      pubdate: s.pubdate || "",
+      image: s.cover || "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 // OpenLibrary
 async function fetchOpenLibrary(isbn) {
   try {
     const res = await fetch("https://openlibrary.org/isbn/" + isbn + ".json");
-if (!res.ok) return null;
-const j = await res.json();
+    if (!res.ok) return null;
 
-let authors = [];
-if (j.authors && j.authors.length > 0) {
-  const ares = await fetch("https://openlibrary.org" + j.authors[0].key + ".json");
-  if (ares.ok) {
-    const aj = await ares.json();
-    authors = [aj.name];
+    const j = await res.json();
+
+    let authors = [];
+    if (j.authors && j.authors.length > 0) {
+      const ares = await fetch("https://openlibrary.org" + j.authors[0].key + ".json");
+      if (ares.ok) {
+        const aj = await ares.json();
+        authors = [aj.name];
+      }
+    }
+
+    let image = "";
+    if (j.covers && j.covers.length > 0) {
+      image = "https://covers.openlibrary.org/b/id/" + j.covers[0] + "-L.jpg";
+    }
+
+    return {
+      title: j.title || "",
+      authors: authors,
+      publisher: j.publishers ? j.publishers.join(",") : "",
+      pubdate: j.publish_date || "",
+      image: image,
+    };
+  } catch {
+    return null;
   }
-}
-
-let image = "";
-if (j.covers && j.covers.length > 0) {
-  image = "https://covers.openlibrary.org/b/id/" + j.covers[0] + "-L.jpg";
-}
-
-return {
-  title: j.title || "",
-  authors: authors,
-  publisher: j.publishers ? j.publishers.join(",") : "",
-  pubdate: j.publish_date || "",
-  image: image
-};
-
-
-} catch {
-return null;
-}
 }
 
 // NDLサーチ
 async function fetchNDL(isbn) {
   try {
     const res = await fetch("https://iss.ndl.go.jp/api/opensearch?isbn=" + isbn);
-if (!res.ok) return null;
+    if (!res.ok) return null;
 
-const txt = await res.text();
-const xml = new DOMParser().parseFromString(txt, "text/xml");
-const item = xml.querySelector("item");
-if (!item) return null;
+    const txt = await res.text();
+    const xml = new DOMParser().parseFromString(txt, "text/xml");
 
-const title = item.querySelector("title")?.textContent || "";
-const author = item.querySelector("dc\\:creator")?.textContent || "";
-const publisher = item.querySelector("dc\\:publisher")?.textContent || "";
-const date = item.querySelector("dc\\:date")?.textContent || "";
+    const item = xml.querySelector("item");
+    if (!item) return null;
 
-return {
-  title: title,
-  authors: author ? [author] : [],
-  publisher: publisher,
-  pubdate: date,
-  image: ""
-};
+    const title = item.querySelector("title")?.textContent || "";
+    const author = item.querySelector("dc\\:creator")?.textContent || "";
+    const publisher = item.querySelector("dc\\:publisher")?.textContent || "";
+    const date = item.querySelector("dc\\:date")?.textContent || "";
 
-
-} catch {
-return null;
-}
+    return {
+      title: title,
+      authors: author ? [author] : [],
+      publisher: publisher,
+      pubdate: date,
+      image: "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Wikidata
 async function fetchWikidata(isbn) {
   try {
     const endpoint = "https://query.wikidata.org/sparql";
-    const query = `SELECT ?item ?itemLabel ?authorLabel ?pubdate ?publisherLabel ?image WHERE {
-      ?item wdt:P212|wdt:P957 "${isbn}".
-      OPTIONAL { ?item rdfs:label ?itemLabel. FILTER (lang(?itemLabel)='ja') }
-      OPTIONAL { ?item wdt:P50 ?author. ?author rdfs:label ?authorLabel. FILTER (lang(?authorLabel)='ja') }
-      OPTIONAL { ?item wdt:P577 ?pubdate. }
-      OPTIONAL { ?item wdt:P123 ?publisher. ?publisher rdfs:label ?publisherLabel. FILTER (lang(?publisherLabel)='ja') }
-      OPTIONAL { ?item wdt:P18 ?image. }
-    } LIMIT 1`;
+    const query =
+      "SELECT ?item ?itemLabel ?authorLabel ?pubdate ?publisherLabel ?image WHERE {" +
+      ' ?item wdt:P212|wdt:P957 "' +
+      isbn +
+      '".' +
+      " OPTIONAL { ?item rdfs:label ?itemLabel. FILTER (lang(?itemLabel)='ja') }" +
+      " OPTIONAL { ?item wdt:P50 ?author. ?author rdfs:label ?authorLabel. FILTER (lang(?authorLabel)='ja') }" +
+      " OPTIONAL { ?item wdt:P577 ?pubdate. }" +
+      " OPTIONAL { ?item wdt:P123 ?publisher. ?publisher rdfs:label ?publisherLabel. FILTER (lang(?publisherLabel)='ja') }" +
+      " OPTIONAL { ?item wdt:P18 ?image. }" +
+      "} LIMIT 1";
 
     const url = endpoint + "?query=" + encodeURIComponent(query) + "&format=json";
 
-const res = await fetch(url);
-if (!res.ok) return null;
+    const res = await fetch(url);
+    if (!res.ok) return null;
 
-const data = await res.json();
-const b = data.results.bindings[0];
-if (!b) return null;
+    const data = await res.json();
+    const b = data.results.bindings[0];
+    if (!b) return null;
 
-return {
-  title: b.itemLabel ? b.itemLabel.value : "",
-  authors: b.authorLabel ? [b.authorLabel.value] : [],
-  publisher: b.publisherLabel ? b.publisherLabel.value : "",
-  pubdate: b.pubdate ? b.pubdate.value : "",
-  image: b.image ? b.image.value : ""
-};
-
-
-} catch {
-return null;
-}
+    return {
+      title: b.itemLabel ? b.itemLabel.value : "",
+      authors: b.authorLabel ? [b.authorLabel.value] : [],
+      publisher: b.publisherLabel ? b.publisherLabel.value : "",
+      pubdate: b.pubdate ? b.pubdate.value : "",
+      image: b.image ? b.image.value : "",
+    };
+  } catch {
+    return null;
+  }
 }
 
-// API を順に試す（最初に成功したものを採用）
+// API を順に試す
 async function fetchBookInfo(isbn) {
-const f1 = await fetchOpenBD(isbn);
-if (f1) return f1;
-
-const f2 = await fetchOpenLibrary(isbn);
-if (f2) return f2;
-
-const f3 = await fetchNDL(isbn);
-if (f3) return f3;
-
-const f4 = await fetchWikidata(isbn);
-if (f4) return f4;
-
-return null;
+  return (
+    (await fetchOpenBD(isbn)) ||
+    (await fetchOpenLibrary(isbn)) ||
+    (await fetchNDL(isbn)) ||
+    (await fetchWikidata(isbn))
+  );
 }
 
 // UI本体
 export default function Home() {
-const [isbn, setIsbn] = useState("");
-const [books, setBooks] = useState([]);
-const [scanning, setScanning] = useState(false);
-const html5QrCode = useRef(null);
+  const [isbn, setIsbn] = useState("");
+  const [books, setBooks] = useState([]);
+  const [scanning, setScanning] = useState(false);
+  const html5QrCode = useRef(null);
 
-// 初回ロード時に Supabase から books を取得
-useEffect(() => {
-loadBooks();
-}, []);
+  // 初回ロード時に Supabase から books を取得
+  useEffect(() => {
+    loadBooks();
+  }, []);
 
-async function loadBooks() {
-const data = await fetchBooksFromSupabase();
-setBooks(data);
-}
-
-// スキャン開始
-async function startScan() {
-if (scanning) return;
-
-setScanning(true);
-
-  try {
-    if (!html5QrCode.current) {
-      html5QrCode.current = new Html5Qrcode("reader");
-    }
-
-    // Try to enumerate cameras and prefer a back-facing camera when available.
-    let preferredCameraId = null;
-    try {
-      const devices = await Html5Qrcode.getCameras();
-      if (devices && devices.length) {
-        // prefer camera whose label contains back/rear/environment
-        const back = devices.find((d) => /back|rear|environment|背面|後ろ/i.test(d.label));
-        preferredCameraId = (back && back.id) || devices[devices.length - 1].id;
-      }
-    } catch (e) {
-      // getCameras may fail on some browsers; we'll fallback to facingMode
-      preferredCameraId = null;
-    }
-
-    const config = { fps: 10, qrbox: 250 };
-
-    const onSuccess = (decoded) => {
-      if (decoded) {
-        setIsbn(decoded);
-        stopScan();
-      }
-    };
-
-    const onError = (err) => {
-      // optional: console.debug(err);
-    };
-
-    if (preferredCameraId) {
-      await html5QrCode.current.start(preferredCameraId, config, onSuccess, onError);
-    } else {
-      // fallback to facingMode; some browsers (esp. Safari) handle this better
-      await html5QrCode.current.start({ facingMode: "environment" }, config, onSuccess, onError);
-    }
-  } catch (err) {
-    console.error("カメラ開始に失敗しました:", err);
-    alert("カメラを起動できませんでした。ページをHTTPSで開いているか、カメラの権限を許可しているか確認してください。\n詳細: " + err);
-    setScanning(false);
+  async function loadBooks() {
+    const data = await fetchBooksFromSupabase();
+    setBooks(data);
   }
 
-}
+  // スキャン開始（html5-qrcode を動的 import）
+  async function startScan() {
+    if (scanning) return;
 
-// スキャン停止
-async function stopScan() {
-if (html5QrCode.current) {
-await html5QrCode.current.stop();
-await html5QrCode.current.clear();
-html5QrCode.current = null;
-setScanning(false);
-}
-}
+    setScanning(true);
 
-// 検索 → 保存
-async function searchAndSave() {
-const info = await fetchBookInfo(isbn);
-if (!info) {
-alert("書誌データが見つかりませんでした");
-return;
-}
+    const { Html5Qrcode } = await import("html5-qrcode");
 
-const newBook = {
-  isbn: isbn,
-  title: info.title,
-  authors: info.authors,
-  publisher: info.publisher,
-  pubdate: info.pubdate,
-  image: info.image,
-  shelf: "",
-  created_at: new Date().toISOString()
-};
+    html5QrCode.current = new Html5Qrcode("reader");
 
-const ok = await saveBooksToSupabase([newBook]);
-if (ok) {
-  alert("保存しました");
-  loadBooks();
-} else {
-  alert("保存に失敗しました");
-}
+    const cameras = await Html5Qrcode.getCameras();
+    if (!cameras || cameras.length === 0) {
+      alert("カメラが見つかりません");
+      setScanning(false);
+      return;
+    }
 
+    await html5QrCode.current.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 250 },
+      (decoded) => {
+        if (decoded) {
+          setIsbn(decoded);
+          stopScan();
+        }
+      },
+      (err) => {
+        console.warn("QRエラー:", err);
+      }
+    );
+  }
 
-}
+  // スキャン停止
+  async function stopScan() {
+    if (html5QrCode.current) {
+      await html5QrCode.current.stop();
+      await html5QrCode.current.clear();
+      html5QrCode.current = null;
+      setScanning(false);
+    }
+  }
 
-return (
-<div style={{ padding: 20 }}>
-<h2>蔵書管理アプリ（完全版）</h2>
+  // 書誌検索 → 保存
+  async function searchAndSave() {
+    const info = await fetchBookInfo(isbn);
+    if (!info) {
+      alert("書誌データが見つかりませんでした");
+      return;
+    }
 
-  <div
-    id="reader"
-    style={{ width: "100%", height: scanning ? 300 : 0, overflow: "hidden" }}
-  ></div>
+    const newBook = {
+      isbn: isbn,
+      title: info.title,
+      authors: info.authors,
+      publisher: info.publisher,
+      pubdate: info.pubdate,
+      image: info.image,
+      shelf: "",
+      created_at: new Date().toISOString(),
+    };
 
-  {!scanning && (
-    <button onClick={startScan} style={{ padding: 10, marginTop: 10 }}>
-      カメラでISBNを読み取る
-    </button>
-  )}
+    const ok = await saveBooksToSupabase([newBook]);
+    if (ok) {
+      alert("保存しました");
+      loadBooks();
+    } else {
+      alert("保存に失敗しました");
+    }
+  }
 
-  {scanning && (
-    <button onClick={stopScan} style={{ padding: 10, marginTop: 10 }}>
-      カメラ停止
-    </button>
-  )}
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>蔵書管理アプリ（完全動作版）</h2>
 
-  <input
-    type="text"
-    placeholder="ISBN 手入力"
-    value={isbn}
-    onChange={(e) => setIsbn(e.target.value)}
-    style={{ width: "100%", padding: 10, marginTop: 20 }}
-  />
+      <div
+        id="reader"
+        style={{
+          width: "100%",
+          minHeight: 300, // ← 高さ0で起動失敗するため固定
+          background: "#000",
+        }}
+      ></div>
 
-  <button
-    onClick={searchAndSave}
-    style={{ width: "100%", padding: 10, marginTop: 10 }}
-  >
-    書誌取得して保存
-  </button>
+      {!scanning && (
+        <button onClick={startScan} style={{ padding: 10, marginTop: 10 }}>
+          カメラでISBNを読み取る
+        </button>
+      )}
 
-  <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
-  {books.map((b) => (
-    <div key={b.isbn} style={{ marginBottom: 20 }}>
-      <div>ISBN: {b.isbn}</div>
-      <div>タイトル: {b.title}</div>
-      <div>著者: {b.authors ? b.authors.join(", ") : ""}</div>
+      {scanning && (
+        <button onClick={stopScan} style={{ padding: 10, marginTop: 10 }}>
+          カメラ停止
+        </button>
+      )}
+
+      <input
+        type="text"
+        placeholder="ISBN 手入力"
+        value={isbn}
+        onChange={(e) => setIsbn(e.target.value)}
+        style={{ width: "100%", padding: 10, marginTop: 20 }}
+      />
+
+      <button
+        onClick={searchAndSave}
+        style={{ width: "100%", padding: 10, marginTop: 10 }}
+      >
+        書誌取得して保存
+      </button>
+
+      <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
+      {books.map((b) => (
+        <div key={b.isbn} style={{ marginBottom: 20 }}>
+          <div>ISBN: {b.isbn}</div>
+          <div>タイトル: {b.title}</div>
+          <div>著者: {b.authors ? b.authors.join(", ") : ""}</div>
+        </div>
+      ))}
     </div>
-  ))}
-</div>
-
-);
+  );
 }
