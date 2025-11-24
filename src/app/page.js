@@ -9,14 +9,14 @@ const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co";
 const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Supabase: books取得
+// Supabase: books テーブル取得
 async function fetchBooksFromSupabase() {
   const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
   if (error) return [];
   return data || [];
 }
 
-// Supabase: books保存
+// Supabase: books テーブル保存（Upsert）
 async function saveBooksToSupabase(books) {
   const rows = books.map((b) => ({
     isbn: b.isbn,
@@ -33,13 +33,13 @@ async function saveBooksToSupabase(books) {
   return !error;
 }
 
-// Supabase: 個別削除
+// Supabase: books 削除
 async function deleteBookFromSupabase(isbn) {
   const { error } = await supabase.from("books").delete().eq("isbn", isbn);
   return !error;
 }
 
-// OpenBD 取得
+// OpenBD から書誌情報取得
 async function fetchOpenBD(isbn) {
   try {
     const res = await fetch("https://api.openbd.jp/v1/get?isbn=" + isbn);
@@ -59,7 +59,7 @@ async function fetchOpenBD(isbn) {
   }
 }
 
-// Wikidata 取得
+// Wikidata から出版社・画像取得
 async function fetchWikidata(isbn) {
   try {
     const query = `
@@ -85,7 +85,7 @@ async function fetchWikidata(isbn) {
   }
 }
 
-// API順に試す
+// APIを順に試す
 async function fetchBookInfo(isbn) {
   let info = await fetchOpenBD(isbn);
   const wd = await fetchWikidata(isbn);
@@ -97,7 +97,7 @@ async function fetchBookInfo(isbn) {
   return info;
 }
 
-// UI
+// UI 本体
 export default function Home() {
   const [isbn, setIsbn] = useState("");
   const [books, setBooks] = useState([]);
@@ -122,20 +122,24 @@ export default function Home() {
     if (scanning) return;
     setScanning(true);
     try {
-      const videoDevices = await BrowserMultiFormatReader.listVideoInputDevices();
-      let deviceId = videoDevices.find(d => d.label.toLowerCase().includes("back"))?.deviceId || videoDevices[0]?.deviceId;
-      if (!deviceId) { alert("カメラが見つかりません"); setScanning(false); return; }
+      const videoElement = videoRef.current;
+      if (!videoElement) return;
 
-      await codeReader.current.decodeFromVideoDevice(deviceId, videoRef.current, result => {
-        const text = result.getText();
-        if (text.startsWith("978") && text.length === 13) {
-          setIsbn(text);
-          stopScan();
-          searchAndSave(text);
+      await codeReader.current.decodeFromConstraints(
+        { video: { facingMode: "environment" } },
+        videoElement,
+        result => {
+          const text = result.getText();
+          if (text.startsWith("978") && text.length === 13) {
+            setIsbn(text);
+            stopScan();
+            searchAndSave(text);
+          }
         }
-      });
+      );
     } catch (err) {
       console.error(err);
+      alert("カメラの起動に失敗しました。\nPCはウェブカメラ、iPhoneはSafariでHTTPS環境を確認してください。");
       setScanning(false);
     }
   }
@@ -164,14 +168,16 @@ export default function Home() {
     const ok = await saveBooksToSupabase([newBook]);
     if (ok) {
       loadBooks();
-      if (exists) beepRef.current.play();
+      if (exists && beepRef.current) {
+        beepRef.current.play();
+      }
     } else {
       alert("保存に失敗しました");
     }
   }
 
-  async function deleteBook(isbn) {
-    if (confirm("削除しますか？")) {
+  async function handleDelete(isbn) {
+    if (confirm("この本を削除しますか？")) {
       const ok = await deleteBookFromSupabase(isbn);
       if (ok) loadBooks();
       else alert("削除に失敗しました");
@@ -186,7 +192,7 @@ export default function Home() {
       <h2>蔵書管理アプリ</h2>
 
       <div style={{ width: "100%", maxHeight: "40vh", overflow: "hidden", marginBottom: 10 }}>
-        <video ref={videoRef} style={{ width: "100%" }} />
+        <video ref={videoRef} style={{ width: "100%" }} playsInline autoPlay muted />
       </div>
       {!scanning && <button onClick={startScan} style={{ padding: 10, marginTop: 10 }}>カメラでISBNを読み取る</button>}
       {scanning && <button onClick={stopScan} style={{ padding: 10, marginTop: 10 }}>カメラ停止</button>}
@@ -217,7 +223,7 @@ export default function Home() {
           <div>出版社: {b.publisher}</div>
           <div>出版日: {b.pubdate}</div>
           <div>本棚: {b.shelf}</div>
-          <button onClick={() => deleteBook(b.isbn)} style={{ marginTop: 5 }}>削除</button>
+          <button onClick={() => handleDelete(b.isbn)} style={{ marginTop: 5 }}>削除</button>
         </div>
       ))}
     </div>
