@@ -1,8 +1,10 @@
 # netlify.toml - Next.js + Supabase 用
 
 [build]
-  command = "npm run build"
+[build]
+  command = "echo $NEXT_PUBLIC_SUPABASE_URL && npm run build"
   publish = ".next"
+ 
 
 [build.environment]
   # Node.js のバージョン指定
