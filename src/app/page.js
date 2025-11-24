@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { BrowserMultiFormatReader, NotFoundException } from "@zxing/browser";
+import { BrowserMultiFormatReader } from "@zxing/browser";
 import { createClient } from "@supabase/supabase-js";
 
-// Supabase 設定（環境変数から読み込む）
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+// Supabase 設定
+const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co";
+const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Supabase: books テーブル取得
@@ -18,7 +18,7 @@ async function fetchBooksFromSupabase() {
 
 // Supabase: books テーブル保存（Upsert）
 async function saveBooksToSupabase(books) {
-  const rows = books.map((b) => ({
+  const rows = books.map(b => ({
     isbn: b.isbn,
     title: b.title,
     authors: b.authors,
@@ -53,10 +53,63 @@ async function fetchOpenBD(isbn) {
   }
 }
 
-// APIを順に試す（ここでは OpenBD のみ）
+// Google Books API から書誌情報取得
+async function fetchGoogleBooks(isbn) {
+  try {
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+    if (!res.ok) return null;
+    const j = await res.json();
+    if (!j.items || j.items.length === 0) return null;
+    const v = j.items[0].volumeInfo;
+    return {
+      title: v.title || "",
+      authors: v.authors || [],
+      publisher: v.publisher || "",
+      pubdate: v.publishedDate || "",
+      image: v.imageLinks ? v.imageLinks.thumbnail : ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Wikidata から書誌情報取得
+async function fetchWikidata(isbn) {
+  try {
+    const query = `
+      SELECT ?item ?itemLabel ?authorLabel ?pubDate WHERE {
+        ?item wdt:P212 "${isbn}".
+        OPTIONAL { ?item wdt:P50 ?author. ?author rdfs:label ?authorLabel FILTER(LANG(?authorLabel)="ja") }
+        OPTIONAL { ?item wdt:P577 ?pubDate. }
+      }
+      LIMIT 1
+    `;
+    const url = "https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(query);
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const j = await res.json();
+    if (!j.results || !j.results.bindings || j.results.bindings.length === 0) return null;
+    const b = j.results.bindings[0];
+    return {
+      title: b.itemLabel ? b.itemLabel.value : "",
+      authors: b.authorLabel ? [b.authorLabel.value] : [],
+      publisher: "",
+      pubdate: b.pubDate ? b.pubDate.value.split("T")[0] : "",
+      image: ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+// APIを順に試す（OpenBD → Google Books → Wikidata）
 async function fetchBookInfo(isbn) {
-  const f1 = await fetchOpenBD(isbn);
-  if (f1) return f1;
+  const openbd = await fetchOpenBD(isbn);
+  if (openbd) return openbd;
+  const google = await fetchGoogleBooks(isbn);
+  if (google) return google;
+  const wikidata = await fetchWikidata(isbn);
+  if (wikidata) return wikidata;
   return null;
 }
 
@@ -96,7 +149,7 @@ export default function Home() {
         }
       );
     } catch (err) {
-      if (!(err instanceof NotFoundException)) console.error(err);
+      console.error(err);
     }
   }
 
@@ -128,7 +181,7 @@ export default function Home() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>蔵書管理アプリ（完全版）</h2>
+      <h2>蔵書管理アプリ（OpenBD・Google・Wikidata対応）</h2>
       <div style={{ width: "100%", maxHeight: "50vh", overflow: "hidden", marginBottom: 10 }}>
         <video ref={videoRef} style={{ width: "100%" }} />
       </div>
