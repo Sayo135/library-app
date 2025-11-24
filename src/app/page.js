@@ -33,6 +33,12 @@ async function saveBooksToSupabase(books) {
   return !error;
 }
 
+// Supabase: books テーブル削除
+async function deleteBookFromSupabase(isbn) {
+  const { error } = await supabase.from("books").delete().eq("isbn", isbn);
+  return !error;
+}
+
 // OpenBD から書誌情報取得
 async function fetchOpenBD(isbn) {
   try {
@@ -91,12 +97,12 @@ async function fetchBookInfo(isbn) {
   return info;
 }
 
-// UI 本体
 export default function Home() {
   const [isbn, setIsbn] = useState("");
   const [books, setBooks] = useState([]);
   const [scanning, setScanning] = useState(false);
   const [searchShelf, setSearchShelf] = useState("");
+  const [videoInputId, setVideoInputId] = useState(null);
   const videoRef = useRef(null);
   const codeReader = useRef(null);
   const beepRef = useRef(null);
@@ -104,6 +110,13 @@ export default function Home() {
   useEffect(() => {
     loadBooks();
     codeReader.current = new BrowserMultiFormatReader();
+
+    // 背面カメラを優先して選択
+    BrowserMultiFormatReader.listVideoInputDevices().then(devices => {
+      const backCamera = devices.find(d => d.label.toLowerCase().includes("back") || d.label.toLowerCase().includes("environment"));
+      setVideoInputId(backCamera?.deviceId || (devices[0] && devices[0].deviceId));
+    });
+
     return () => { stopScan(); };
   }, []);
 
@@ -113,25 +126,23 @@ export default function Home() {
   }
 
   async function startScan() {
-    if (scanning) return;
+    if (scanning || !videoInputId) return;
     setScanning(true);
     try {
-      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-      if (!devices || devices.length === 0) return alert("カメラが見つかりません");
-      const deviceId = devices[0].deviceId;
-      codeReader.current.decodeOnceFromVideoDevice(deviceId, videoRef.current)
-        .then(result => {
-          const text = result.getText();
-          if (text.startsWith("978") && text.length === 13) {
-            setIsbn(text);
-            searchAndSave(text);
+      await codeReader.current.decodeFromVideoDevice(
+        videoInputId,
+        videoRef.current,
+        result => {
+          if (result) {
+            const text = result.getText();
+            if (text.startsWith("978") && text.length === 13) {
+              setIsbn(text);
+              stopScan();
+              searchAndSave(text);
+            }
           }
-          setScanning(false);
-        })
-        .catch(err => {
-          console.error(err);
-          setScanning(false);
-        });
+        }
+      );
     } catch (err) {
       console.error(err);
       setScanning(false);
@@ -163,11 +174,21 @@ export default function Home() {
     if (ok) {
       loadBooks();
       if (exists) {
+        // ブザー音
+        beepRef.current.play();
+      } else {
+        // 初回はビープ音
         beepRef.current.play();
       }
     } else {
       alert("保存に失敗しました");
     }
+  }
+
+  async function deleteBook(isbn) {
+    const ok = await deleteBookFromSupabase(isbn);
+    if (ok) loadBooks();
+    else alert("削除に失敗しました");
   }
 
   const filteredBooks = books.filter(b => !searchShelf || (b.shelf && b.shelf.includes(searchShelf)));
@@ -178,7 +199,7 @@ export default function Home() {
       <h2>蔵書管理アプリ</h2>
 
       <div style={{ width: "100%", maxHeight: "40vh", overflow: "hidden", marginBottom: 10 }}>
-        <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "auto" }} />
+        <video ref={videoRef} style={{ width: "100%" }} />
       </div>
       {!scanning && <button onClick={startScan} style={{ padding: 10, marginTop: 10 }}>カメラでISBNを読み取る</button>}
       {scanning && <button onClick={stopScan} style={{ padding: 10, marginTop: 10 }}>カメラ停止</button>}
@@ -201,7 +222,7 @@ export default function Home() {
 
       <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
       {filteredBooks.map(b => (
-        <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black" }}>
+        <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black", border: "1px solid #ccc", padding: 10 }}>
           {b.image && <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} />}
           <div>ISBN: {b.isbn}</div>
           <div>タイトル: {b.title}</div>
@@ -209,6 +230,7 @@ export default function Home() {
           <div>出版社: {b.publisher}</div>
           <div>出版日: {b.pubdate}</div>
           <div>本棚: {b.shelf}</div>
+          <button onClick={() => deleteBook(b.isbn)} style={{ marginTop: 5 }}>削除</button>
         </div>
       ))}
     </div>
