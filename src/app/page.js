@@ -205,19 +205,49 @@ if (scanning) return;
 
 setScanning(true);
 
-html5QrCode.current = new Html5Qrcode("reader");
-
-await html5QrCode.current.start(
-  { facingMode: "environment" },
-  { fps: 10, qrbox: 250 },
-  (decoded) => {
-    if (decoded) {
-      setIsbn(decoded);
-      stopScan();
+  try {
+    if (!html5QrCode.current) {
+      html5QrCode.current = new Html5Qrcode("reader");
     }
-  }
-);
 
+    // Try to enumerate cameras and prefer a back-facing camera when available.
+    let preferredCameraId = null;
+    try {
+      const devices = await Html5Qrcode.getCameras();
+      if (devices && devices.length) {
+        // prefer camera whose label contains back/rear/environment
+        const back = devices.find((d) => /back|rear|environment|背面|後ろ/i.test(d.label));
+        preferredCameraId = (back && back.id) || devices[devices.length - 1].id;
+      }
+    } catch (e) {
+      // getCameras may fail on some browsers; we'll fallback to facingMode
+      preferredCameraId = null;
+    }
+
+    const config = { fps: 10, qrbox: 250 };
+
+    const onSuccess = (decoded) => {
+      if (decoded) {
+        setIsbn(decoded);
+        stopScan();
+      }
+    };
+
+    const onError = (err) => {
+      // optional: console.debug(err);
+    };
+
+    if (preferredCameraId) {
+      await html5QrCode.current.start(preferredCameraId, config, onSuccess, onError);
+    } else {
+      // fallback to facingMode; some browsers (esp. Safari) handle this better
+      await html5QrCode.current.start({ facingMode: "environment" }, config, onSuccess, onError);
+    }
+  } catch (err) {
+    console.error("カメラ開始に失敗しました:", err);
+    alert("カメラを起動できませんでした。ページをHTTPSで開いているか、カメラの権限を許可しているか確認してください。\n詳細: " + err);
+    setScanning(false);
+  }
 
 }
 
