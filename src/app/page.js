@@ -17,25 +17,20 @@ async function fetchBooksFromSupabase() {
 }
 
 // Supabase: books テーブル保存（Upsert）
-async function saveBooksToSupabase(books) {
-  const rows = books.map((b) => ({
-    isbn: b.isbn,
-    title: b.title,
-    authors: b.authors,
-    publisher: b.publisher,
-    pubdate: b.pubdate,
-    image: b.image,
-    shelf: b.shelf,
-    duplicate: b.duplicate || false,
-    created_at: b.created_at || new Date().toISOString()
-  }));
-  const { error } = await supabase.from("books").upsert(rows, { onConflict: ["isbn"] });
+async function saveBooksToSupabase(book) {
+  const { error } = await supabase.from("books").insert([book]);
+  return !error;
+}
+
+// Supabase: books 更新
+async function updateBookInSupabase(book) {
+  const { error } = await supabase.from("books").update(book).eq("isbn", book.isbn).eq("created_at", book.created_at);
   return !error;
 }
 
 // Supabase: 本削除
-async function deleteBookFromSupabase(isbn) {
-  const { error } = await supabase.from("books").delete().eq("isbn", isbn);
+async function deleteBookFromSupabase(id) {
+  const { error } = await supabase.from("books").delete().eq("id", id);
   return !error;
 }
 
@@ -99,9 +94,7 @@ async function fetchBookInfo(isbn) {
 
 // UI 本体
 export default function Home() {
-  const [isbn, setIsbn] = useState("");
   const [books, setBooks] = useState([]);
-  const [scanning, setScanning] = useState(false);
   const [searchShelf, setSearchShelf] = useState("");
   const videoRef = useRef(null);
   const codeReader = useRef(null);
@@ -111,7 +104,7 @@ export default function Home() {
   useEffect(() => {
     loadBooks();
     codeReader.current = new BrowserMultiFormatReader();
-    startScan(); // 起動時に連続スキャン開始
+    startScan();
     return () => { stopScan(); };
   }, []);
 
@@ -121,69 +114,66 @@ export default function Home() {
   }
 
   async function startScan() {
-    if (scanning) return;
-    setScanning(true);
     try {
       const videoElement = videoRef.current;
       if (!videoElement) return;
       await codeReader.current.decodeFromVideoDevice(null, videoElement, async (result, err) => {
         if (result) {
-          const text = result.getText();
-          if (text.startsWith("978") && text.length === 13) {
-            setIsbn(text);
-            await searchAndSave(text);
+          const isbn = result.getText();
+          if (isbn.startsWith("978") && isbn.length === 13) {
+            await handleScan(isbn);
           }
-        }
-        if (err) {
-          // 継続して読み取り可能
         }
       });
     } catch (err) {
       console.error("カメラ起動失敗:", err);
-      alert("カメラの起動に失敗しました。許可やカメラが利用可能か確認してください。");
+      alert("カメラの起動に失敗しました");
     }
   }
 
   async function stopScan() {
     if (codeReader.current) {
       try { await codeReader.current.reset(); } catch {}
-      setScanning(false);
     }
   }
 
-  async function searchAndSave(inputIsbn) {
-    const info = await fetchBookInfo(inputIsbn);
-    const exists = books.find(b => b.isbn === inputIsbn);
+  async function handleScan(isbn) {
+    const info = await fetchBookInfo(isbn);
     const newBook = {
-      isbn: inputIsbn,
+      isbn,
       title: info.title || "(書名なし)",
       authors: info.authors.length ? info.authors : ["(著者なし)"],
       publisher: info.publisher || "(出版社なし)",
       pubdate: info.pubdate || "(出版日なし)",
       image: info.image || "",
-      shelf: exists?.shelf || "",
-      duplicate: exists ? true : false,
+      shelf: "",
+      duplicate: books.some(b => b.isbn === isbn),
       created_at: new Date().toISOString()
     };
-    const ok = await saveBooksToSupabase([newBook]);
+    const ok = await saveBooksToSupabase(newBook);
     if (ok) {
-      loadBooks();
-      if (exists) {
+      setBooks(prev => [newBook, ...prev]);
+      if (newBook.duplicate) {
+        buzzerRef.current.load();
         buzzerRef.current.play();
       } else {
+        beepRef.current.load();
         beepRef.current.play();
       }
-    } else {
-      alert("保存に失敗しました");
     }
   }
 
-  async function deleteBook(isbn) {
-    const ok = await deleteBookFromSupabase(isbn);
+  async function deleteBook(id) {
+    const ok = await deleteBookFromSupabase(id);
     if (ok) loadBooks();
   }
 
-  const filteredBooks = books.filter(b => !searchShelf || (b.shelf && b.shelf.includes(searchShelf)));
+  async function updateBook(book) {
+    const ok = await updateBookInSupabase(book);
+    if (ok) loadBooks();
+  }
+
+  const shelves = [...new Set(books.map(b => b.shelf || "未設定"))];
 
   return (
     <div style={{ padding: 20 }}>
@@ -195,15 +185,6 @@ export default function Home() {
         <video ref={videoRef} style={{ width: "100%" }} />
       </div>
 
-      <div>
-        <input
-          type="text"
-          value={isbn}
-          readOnly
-          style={{ width: "100%", padding: 10, marginTop: 10 }}
-        />
-      </div>
-
       <input
         type="text"
         placeholder="本棚検索"
@@ -212,17 +193,31 @@ export default function Home() {
         style={{ width: "100%", padding: 10, marginTop: 10 }}
       />
 
-      <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
-      {filteredBooks.map(b => (
-        <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black", border: "1px solid #ccc", padding: 10 }}>
-          {b.image ? <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} /> : <div>(書影なし)</div>}
-          <div>ISBN: {b.isbn}</div>
-          <div>タイトル: {b.title}</div>
-          <div>著者: {b.authors.join(", ")}</div>
-          <div>出版社: {b.publisher}</div>
-          <div>出版日: {b.pubdate}</div>
-          <div>本棚: {b.shelf}</div>
-          <button onClick={() => deleteBook(b.isbn)} style={{ marginTop: 5 }}>削除</button>
+      {shelves.filter(s => !searchShelf || s.includes(searchShelf)).map(shelf => (
+        <div key={shelf} style={{ marginTop: 20 }}>
+          <h3>{shelf}</h3>
+          {books.filter(b => (b.shelf || "未設定") === shelf).map(b => (
+            <div key={b.created_at} style={{ marginBottom: 15, color: b.duplicate ? "red" : "black", border: "1px solid #ccc", padding: 10 }}>
+              {b.image ? <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} /> : <div>(書影なし)</div>}
+              <div>ISBN: {b.isbn}</div>
+              <div>
+                タイトル: <input value={b.title} onChange={e => b.title = e.target.value} onBlur={() => updateBook(b)} />
+              </div>
+              <div>
+                著者: <input value={b.authors.join(", ")} onChange={e => { b.authors = e.target.value.split(","); }} onBlur={() => updateBook(b)} />
+              </div>
+              <div>
+                出版社: <input value={b.publisher} onChange={e => b.publisher = e.target.value} onBlur={() => updateBook(b)} />
+              </div>
+              <div>
+                出版日: <input value={b.pubdate} onChange={e => b.pubdate = e.target.value} onBlur={() => updateBook(b)} />
+              </div>
+              <div>
+                本棚: <input value={b.shelf} onChange={e => b.shelf = e.target.value} onBlur={() => updateBook(b)} />
+              </div>
+              <button onClick={() => deleteBook(b.id)} style={{ marginTop: 5 }}>削除</button>
+            </div>
+          ))}
         </div>
       ))}
     </div>
