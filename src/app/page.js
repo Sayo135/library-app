@@ -4,19 +4,25 @@ import { useState, useEffect, useRef } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { createClient } from "@supabase/supabase-js";
 
-// Supabase設定（環境変数優先）。Netlifyでは `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` を設定してください。
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://sumqfcjvndnpuoirpkrb.supabase.co";
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Supabaseクライアントはビルド/サーバー側で即生成すると環境変数が未設定でエラーになるため
+// ブラウザ実行時に遅延生成するヘルパを使います。
+function getSupabaseClient() {
+  if (typeof window === "undefined") return null;
+  if (!window.__supabase) {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://sumqfcjvndnpuoirpkrb.supabase.co";
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
+    window.__supabase = createClient(supabaseUrl, supabaseKey);
+  }
+  return window.__supabase;
+}
 
 // Supabase: booksテーブルから取得
 async function fetchBooksFromSupabase() {
-const { data, error } = await supabase
-.from("books")
-.select("*")
-.order("created_at", { ascending: false });
-if (error) return [];
-return data || [];
+  const supabase = getSupabaseClient();
+  if (!supabase) return [];
+  const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
+  if (error) return [];
+  return data || [];
 }
 
 // Supabase: booksテーブルに保存（Upsert）
@@ -32,8 +38,10 @@ shelf: b.shelf,
 duplicate: b.duplicate || false,
 created_at: b.created_at || new Date().toISOString(),
 }));
-const { error } = await supabase.from("books").upsert(rows, { onConflict: ["isbn"] });
-return !error;
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+  const { error } = await supabase.from("books").upsert(rows, { onConflict: ["isbn"] });
+  return !error;
 }
 
 // OpenBD
