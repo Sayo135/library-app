@@ -116,22 +116,25 @@ export default function Home() {
     if (scanning) return;
     setScanning(true);
     try {
-      const videoElement = videoRef.current;
-      if (!videoElement) return;
-      await codeReader.current.decodeFromConstraints(
-        { video: { facingMode: "environment" } },
-        videoElement,
-        result => {
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+      if (!devices || devices.length === 0) return alert("カメラが見つかりません");
+      const deviceId = devices[0].deviceId;
+      codeReader.current.decodeOnceFromVideoDevice(deviceId, videoRef.current)
+        .then(result => {
           const text = result.getText();
           if (text.startsWith("978") && text.length === 13) {
             setIsbn(text);
-            stopScan();
             searchAndSave(text);
           }
-        }
-      );
+          setScanning(false);
+        })
+        .catch(err => {
+          console.error(err);
+          setScanning(false);
+        });
     } catch (err) {
       console.error(err);
+      setScanning(false);
     }
   }
 
@@ -175,7 +178,7 @@ export default function Home() {
       <h2>蔵書管理アプリ</h2>
 
       <div style={{ width: "100%", maxHeight: "40vh", overflow: "hidden", marginBottom: 10 }}>
-        <video ref={videoRef} style={{ width: "100%" }} />
+        <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "auto" }} />
       </div>
       {!scanning && <button onClick={startScan} style={{ padding: 10, marginTop: 10 }}>カメラでISBNを読み取る</button>}
       {scanning && <button onClick={stopScan} style={{ padding: 10, marginTop: 10 }}>カメラ停止</button>}
