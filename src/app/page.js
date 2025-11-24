@@ -4,10 +4,9 @@ import { useState, useEffect, useRef } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { createClient } from "@supabase/supabase-js";
 
-// Supabase設定（あなたの環境に固定）
-const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co
-";
-const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
+// Supabase設定（環境変数優先）。Netlifyでは `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` を設定してください。
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://sumqfcjvndnpuoirpkrb.supabase.co";
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Supabase: booksテーブルから取得
@@ -39,9 +38,8 @@ return !error;
 
 // OpenBD
 async function fetchOpenBD(isbn) {
-try {
-const res = await fetch("https://api.openbd.jp/v1/get?isbn=
-" + isbn);
+  try {
+    const res = await fetch("https://api.openbd.jp/v1/get?isbn=" + isbn);
 if (!res.ok) return null;
 const j = await res.json();
 if (!j || !j[0] || !j[0].summary) return null;
@@ -60,9 +58,8 @@ return null;
 
 // OpenLibrary
 async function fetchOpenLibrary(isbn) {
-try {
-const res = await fetch("https://openlibrary.org/isbn/
-" + isbn + ".json");
+  try {
+    const res = await fetch("https://openlibrary.org/isbn/" + isbn + ".json");
 if (!res.ok) return null;
 const j = await res.json();
 
@@ -96,9 +93,8 @@ return null;
 
 // NDLサーチ
 async function fetchNDL(isbn) {
-try {
-const res = await fetch("https://iss.ndl.go.jp/api/opensearch?isbn=
-" + isbn);
+  try {
+    const res = await fetch("https://iss.ndl.go.jp/api/opensearch?isbn=" + isbn);
 if (!res.ok) return null;
 
 const txt = await res.text();
@@ -127,20 +123,18 @@ return null;
 
 // Wikidata
 async function fetchWikidata(isbn) {
-try {
-const endpoint = "https://query.wikidata.org/sparql
-";
-const query =
-"SELECT ?item ?itemLabel ?authorLabel ?pubdate ?publisherLabel ?image WHERE {" +
-' ?item wdt:P212|wdt:P957 "' + isbn + '".' +
-" OPTIONAL { ?item rdfs:label ?itemLabel. FILTER (lang(?itemLabel)='ja') }" +
-" OPTIONAL { ?item wdt:P50 ?author. ?author rdfs:label ?authorLabel. FILTER (lang(?authorLabel)='ja') }" +
-" OPTIONAL { ?item wdt:P577 ?pubdate. }" +
-" OPTIONAL { ?item wdt:P123 ?publisher. ?publisher rdfs:label ?publisherLabel. FILTER (lang(?publisherLabel)='ja') }" +
-" OPTIONAL { ?item wdt:P18 ?image. }" +
-"} LIMIT 1";
+  try {
+    const endpoint = "https://query.wikidata.org/sparql";
+    const query = `SELECT ?item ?itemLabel ?authorLabel ?pubdate ?publisherLabel ?image WHERE {
+      ?item wdt:P212|wdt:P957 "${isbn}".
+      OPTIONAL { ?item rdfs:label ?itemLabel. FILTER (lang(?itemLabel)='ja') }
+      OPTIONAL { ?item wdt:P50 ?author. ?author rdfs:label ?authorLabel. FILTER (lang(?authorLabel)='ja') }
+      OPTIONAL { ?item wdt:P577 ?pubdate. }
+      OPTIONAL { ?item wdt:P123 ?publisher. ?publisher rdfs:label ?publisherLabel. FILTER (lang(?publisherLabel)='ja') }
+      OPTIONAL { ?item wdt:P18 ?image. }
+    } LIMIT 1`;
 
-const url = endpoint + "?query=" + encodeURIComponent(query) + "&format=json";
+    const url = endpoint + "?query=" + encodeURIComponent(query) + "&format=json";
 
 const res = await fetch(url);
 if (!res.ok) return null;
