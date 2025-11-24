@@ -1,11 +1,17 @@
+# netlify.toml - Next.js + Supabase 用
+
 [build]
   command = "npm run build"
   publish = ".next"
-  environment = { 
-    NODE_VERSION = "20",
-    NEXT_PUBLIC_SUPABASE_URL = "https://sumqfcjvndnpuoirpkrb.supabase.co",
-    NEXT_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6"
-  }
+
+[build.environment]
+  # Node.js のバージョン指定
+  NODE_VERSION = "20"
+
+  # Supabase の URL と匿名キー
+  NEXT_PUBLIC_SUPABASE_URL = "https://sumqfcjvndnpuoirpkrb.supabase.co"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6"
+
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
