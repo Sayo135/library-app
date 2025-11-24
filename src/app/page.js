@@ -5,8 +5,7 @@ import { BrowserMultiFormatReader } from "@zxing/browser";
 import { createClient } from "@supabase/supabase-js";
 
 // Supabase 設定
-const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co
-";
+const supabaseUrl = "[https://sumqfcjvndnpuoirpkrb.supabase.co](https://sumqfcjvndnpuoirpkrb.supabase.co)";
 const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -19,7 +18,7 @@ return data || [];
 
 // Supabase: books テーブル保存（Upsert）
 async function saveBooksToSupabase(books) {
-const rows = books.map(b => ({
+const rows = books.map((b) => ({
 isbn: b.isbn,
 title: b.title,
 authors: b.authors,
@@ -37,8 +36,7 @@ return !error;
 // OpenBD から書誌情報取得
 async function fetchOpenBD(isbn) {
 try {
-const res = await fetch("https://api.openbd.jp/v1/get?isbn=
-" + isbn);
+const res = await fetch("[https://api.openbd.jp/v1/get?isbn=](https://api.openbd.jp/v1/get?isbn=)" + isbn);
 if (!res.ok) return null;
 const j = await res.json();
 if (!j || !j[0] || !j[0].summary) return null;
@@ -58,46 +56,38 @@ return null;
 // Wikidata から出版社・画像取得
 async function fetchWikidata(isbn) {
 try {
-const res = await fetch(https://www.wikidata.org/w/api.php?action=wbgetentities&sites=isbn&titles=${isbn}&format=json&origin=*);
+const query = `       SELECT ?item ?itemLabel ?publisher ?publisherLabel ?image WHERE {
+        ?item wdt:P212 "${isbn}" .
+        OPTIONAL { ?item wdt:P123 ?publisher. }
+        OPTIONAL { ?item wdt:P18 ?image. }
+        SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],ja". }
+      } LIMIT 1
+    `;
+const url = "[https://query.wikidata.org/sparql?format=json&query=](https://query.wikidata.org/sparql?format=json&query=)" + encodeURIComponent(query);
+const res = await fetch(url);
 if (!res.ok) return null;
-const j = await res.json();
-const entities = j.entities;
-if (!entities) return null;
-const entityKey = Object.keys(entities)[0];
-const entity = entities[entityKey];
-let publisher = "";
-let image = "";
-if (entity && entity.claims) {
-if (entity.claims.P123) publisher = entity.claims.P123[0].mainsnak.datavalue.value;
-if (entity.claims.P18) image = "https://commons.wikimedia.org/wiki/Special:FilePath/
-" + entity.claims.P18[0].mainsnak.datavalue.value;
-}
-return { publisher, image };
+const data = await res.json();
+const result = data.results.bindings[0];
+if (!result) return null;
+return {
+publisher: result.publisherLabel?.value || "",
+image: result.image?.value || ""
+};
 } catch {
 return null;
 }
 }
 
-// API を順に試す
+// APIを順に試す
 async function fetchBookInfo(isbn) {
 let info = await fetchOpenBD(isbn);
+const wd = await fetchWikidata(isbn);
 if (!info) info = { title: "", authors: [], publisher: "", pubdate: "", image: "" };
-const wikidataInfo = await fetchWikidata(isbn);
-if (wikidataInfo) {
-if (!info.publisher) info.publisher = wikidataInfo.publisher || "";
-if (!info.image) info.image = wikidataInfo.image || "";
+if (wd) {
+if (wd.publisher) info.publisher = wd.publisher;
+if (wd.image) info.image = wd.image;
 }
 return info;
-}
-
-// 音再生用
-function playBeep() {
-const audio = new Audio("/beep.mp3");
-audio.play();
-}
-function playBuzz() {
-const audio = new Audio("/buzz.mp3");
-audio.play();
 }
 
 // UI 本体
@@ -105,10 +95,10 @@ export default function Home() {
 const [isbn, setIsbn] = useState("");
 const [books, setBooks] = useState([]);
 const [scanning, setScanning] = useState(false);
-const [search, setSearch] = useState("");
+const [searchShelf, setSearchShelf] = useState("");
 const videoRef = useRef(null);
 const codeReader = useRef(null);
-const isbnMap = useRef({});
+const beepRef = useRef(null);
 
 useEffect(() => {
 loadBooks();
@@ -119,9 +109,6 @@ return () => { stopScan(); };
 async function loadBooks() {
 const data = await fetchBooksFromSupabase();
 setBooks(data);
-const map = {};
-data.forEach(b => { map[b.isbn] = b; });
-isbnMap.current = map;
 }
 
 async function startScan() {
@@ -131,14 +118,14 @@ try {
 const videoElement = videoRef.current;
 if (!videoElement) return;
 await codeReader.current.decodeFromConstraints(
-{ video: { facingMode: "environment", width: 400, height: 300 } },
+{ video: { facingMode: "environment" } },
 videoElement,
-async result => {
-if (result) {
-const code = result.getText();
-if (!code.startsWith("978")) return;
-setIsbn(code);
-await handleScan(code);
+result => {
+const text = result.getText();
+if (text.startsWith("978") && text.length === 13) {
+setIsbn(text);
+stopScan();
+searchAndSave(text);
 }
 }
 );
@@ -154,43 +141,40 @@ setScanning(false);
 }
 }
 
-async function handleScan(scannedIsbn) {
-const info = await fetchBookInfo(scannedIsbn);
-const duplicate = !!isbnMap.current[scannedIsbn];
+async function searchAndSave(inputIsbn) {
+const info = await fetchBookInfo(inputIsbn);
+const exists = books.find(b => b.isbn === inputIsbn);
 const newBook = {
-isbn: scannedIsbn,
+isbn: inputIsbn,
 title: info.title,
 authors: info.authors,
 publisher: info.publisher,
 pubdate: info.pubdate,
 image: info.image,
-shelf: "",
-duplicate,
+shelf: exists?.shelf || "",
+duplicate: exists ? true : false,
 created_at: new Date().toISOString()
 };
 const ok = await saveBooksToSupabase([newBook]);
 if (ok) {
-if (duplicate) playBuzz();
-else playBeep();
 loadBooks();
+if (exists) {
+beepRef.current.play();
+}
 } else {
 alert("保存に失敗しました");
 }
 }
 
-const filteredBooks = books.filter(b =>
-b.title.toLowerCase().includes(search.toLowerCase()) ||
-b.authors.join(" ").toLowerCase().includes(search.toLowerCase()) ||
-b.shelf.toLowerCase().includes(search.toLowerCase())
-);
+const filteredBooks = books.filter(b => !searchShelf || (b.shelf && b.shelf.includes(searchShelf)));
 
 return (
-<div style={{ padding: 20 }}>
-<h2>蔵書管理アプリ（完全版）</h2>
-<div style={{ width: "100%", maxHeight: "50vh", overflow: "hidden", marginBottom: 10 }}>
-<video ref={videoRef} style={{ width: "100%" }} />
-</div>
+<div style={{ padding: 20 }}> <audio ref={beepRef} src="/beep.mp3" /> <h2>蔵書管理アプリ</h2>
 
+```
+  <div style={{ width: "100%", maxHeight: "40vh", overflow: "hidden", marginBottom: 10 }}>
+    <video ref={videoRef} style={{ width: "100%" }} />
+  </div>
   {!scanning && <button onClick={startScan} style={{ padding: 10, marginTop: 10 }}>カメラでISBNを読み取る</button>}
   {scanning && <button onClick={stopScan} style={{ padding: 10, marginTop: 10 }}>カメラ停止</button>}
 
@@ -201,28 +185,29 @@ return (
     onChange={e => setIsbn(e.target.value)}
     style={{ width: "100%", padding: 10, marginTop: 20 }}
   />
-
   <input
     type="text"
-    placeholder="検索（タイトル・著者・棚）"
-    value={search}
-    onChange={e => setSearch(e.target.value)}
+    placeholder="本棚検索"
+    value={searchShelf}
+    onChange={e => setSearchShelf(e.target.value)}
     style={{ width: "100%", padding: 10, marginTop: 10 }}
   />
+  <button onClick={() => searchAndSave(isbn)} style={{ width: "100%", padding: 10, marginTop: 10 }}>書誌取得して保存</button>
 
   <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
   {filteredBooks.map(b => (
     <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black" }}>
+      {b.image && <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} />}
       <div>ISBN: {b.isbn}</div>
       <div>タイトル: {b.title}</div>
       <div>著者: {b.authors ? b.authors.join(", ") : ""}</div>
       <div>出版社: {b.publisher}</div>
-      <div>棚: {b.shelf}</div>
-      {b.image && <img src={b.image} alt={b.title} style={{ width: 100, marginTop: 5 }} />}
+      <div>出版日: {b.pubdate}</div>
+      <div>本棚: {b.shelf}</div>
     </div>
   ))}
 </div>
-
+```
 
 );
 }
