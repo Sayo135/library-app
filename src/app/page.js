@@ -5,15 +5,16 @@ import dynamic from "next/dynamic";
 
 // Supabase連携
 import { createClient } from "@supabase/supabase-js";
-const supabaseUrl = "[https://sumqfcjvndnpuoirpkrb.supabase.co](https://sumqfcjvndnpuoirpkrb.supabase.co)";
+const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co
+";
 const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // dynamic import（SSR回避）
-const Html5Qrcode = dynamic(
-() => import("html5-qrcode").then((mod) => mod.Html5Qrcode),
-{ ssr: false }
-);
+let Html5Qrcode;
+if (typeof window !== "undefined") {
+Html5Qrcode = dynamic(() => import("html5-qrcode").then(mod => mod.Html5Qrcode), { ssr: false });
+}
 
 // --- Supabase関連関数 ---
 async function fetchBooksFromSupabase() {
@@ -41,37 +42,49 @@ const { error } = await supabase.from("books").upsert(rows, { onConflict: ["isbn
 return !error;
 }
 
-// --- ここに fetchBookInfo / fetchOpenBD / fetchOpenLibrary / fetchNDL / fetchWikidata のコードをそのまま貼る ---
+// --- API呼び出し関数 ---
+async function fetchBookInfo(isbn) {
+try {
+const res = await fetch(https://api.openbd.jp/v1/get?isbn=${isbn});
+const data = await res.json();
+if (!data || !data[0] || !data[0].summary) return {};
+const s = data[0].summary;
+return {
+title: s.title,
+authors: s.author,
+publisher: s.publisher,
+pubdate: s.pubdate,
+image: s.cover,
+};
+} catch {
+return {};
+}
+}
 
 export default function BookScannerPage() {
 const [scanning, setScanning] = useState(false);
-const [isbnInput, setIsbnInput] = useState("");
 const [books, setBooks] = useState([]);
 const [msg, setMsg] = useState("準備中…");
-const [searchText, setSearchText] = useState("");
 
 const html5QrcodeRef = useRef(null);
-const videoStartedRef = useRef(false);
 const lastScannedRef = useRef({});
 const scannedISBNsRef = useRef(new Set());
+const videoStartedRef = useRef(false);
 
-// Supabase初期データ取得＆Html5Qrcode初期化
 useEffect(() => {
 (async () => {
 const data = await fetchBooksFromSupabase();
 setBooks(data);
 setMsg("スキャンできます");
 
-```
-  if (typeof window !== "undefined" && Html5Qrcode) {
+  if (Html5Qrcode) {
     html5QrcodeRef.current = new Html5Qrcode("reader");
   }
 })();
-```
+
 
 }, []);
 
-// Supabase保存
 useEffect(() => {
 if (books.length > 0) saveBooksToSupabase(books);
 }, [books]);
@@ -85,7 +98,6 @@ const last = lastScannedRef.current[isbn] || 0;
 if (now - last < 1500) return;
 lastScannedRef.current[isbn] = now;
 
-```
 setMsg("処理中... " + isbn);
 
 const info = await fetchBookInfo(isbn);
@@ -98,7 +110,7 @@ scannedISBNsRef.current.add(isbn);
 
 setBooks((prev) => [{ isbn, ...info, shelf: "", duplicate }, ...prev]);
 setMsg(duplicate ? "重複登録: " + isbn : "登録完了: " + isbn);
-```
+
 
 };
 
@@ -106,7 +118,6 @@ const startScan = async () => {
 if (scanning || !html5QrcodeRef.current) return;
 setScanning(true);
 
-```
 await html5QrcodeRef.current.start(
   { facingMode: "environment" },
   { fps: 10, qrbox: 250 },
@@ -116,7 +127,7 @@ await html5QrcodeRef.current.start(
 );
 
 videoStartedRef.current = true;
-```
+
 
 };
 
@@ -128,73 +139,36 @@ videoStartedRef.current = false;
 }
 };
 
-const filteredBooks = () => {
-const t = searchText.trim();
-if (!t) return books;
-return books.filter((b) =>
-(b.title + b.publisher + b.isbn + b.authors.join(",") + (b.shelf || "")).includes(t)
-);
-};
-
 return (
-<div style={{ padding: 20 }}> <h1>蔵書スキャナー（OpenBD / OpenLibrary / NDL）</h1> <p>{msg}</p>
+<div>
+<h1>本スキャナー</h1>
+<p>{msg}</p>
 
-```
-  <div style={{ display: "flex", gap: 12 }}>
-    <button onClick={startScan} disabled={scanning}>スキャン開始</button>
-    <button onClick={stopScan} disabled={!scanning}>停止</button>
-  </div>
+  <div id="reader" style={{ width: "400px", height: "300px" }}></div>
 
-  <div id="reader" style={{ width: 300, marginTop: 10 }}></div>
-
-  <h2>ISBN 手入力（13桁）</h2>
-  <input
-    value={isbnInput}
-    onChange={(e) => setIsbnInput(e.target.value)}
-    style={{ width: 200 }}
-  />
-  <button
-    onClick={() => {
-      if (/^97[89]\d{10}$/.test(isbnInput)) handleISBN(isbnInput);
-    }}
-  >
-    手動登録
+  <button onClick={startScan} disabled={scanning}>
+    スキャン開始
+  </button>
+  <button onClick={stopScan} disabled={!scanning}>
+    スキャン停止
   </button>
 
-  <h2>検索（書名・著者・出版社・ISBN・棚）</h2>
-  <input
-    value={searchText}
-    onChange={(e) => setSearchText(e.target.value)}
-    style={{ width: "50%" }}
-  />
-
-  <h2>登録一覧（{filteredBooks().length}件）</h2>
-  {filteredBooks().map((b, i) => (
-    <div
-      key={i}
-      style={{
-        border: "1px solid #ccc",
-        padding: 10,
-        marginBottom: 10,
-        background: b.duplicate ? "#fee" : "#fff",
-        color: b.duplicate ? "red" : "black",
-      }}
-    >
-      <div><strong>書名:</strong> {b.title}</div>
-      <div>著者: {b.authors.join(", ")}</div>
-      <div>出版社: {b.publisher}</div>
-      <div>発行日: {b.pubdate}</div>
-      <div>ISBN: {b.isbn}</div>
-      <div>本棚: {b.shelf}</div>
-      {b.image ? (
-        <img src={b.image} alt="cover" style={{ width: 120, marginTop: 6 }} />
-      ) : (
-        <span style={{ color: "#888", fontStyle: "italic" }}>書影なし</span>
-      )}
-    </div>
-  ))}
+  <h2>登録済みの本</h2>
+  <div>
+    {books.map((b) => (
+      <div key={b.isbn} style={{ border: "1px solid #ccc", margin: "4px", padding: "4px" }}>
+        <img src={b.image} alt={b.title} style={{ width: "80px" }} />
+        <div>ISBN: {b.isbn}</div>
+        <div>タイトル: {b.title}</div>
+        <div>著者: {b.authors}</div>
+        <div>出版社: {b.publisher}</div>
+        <div>出版日: {b.pubdate}</div>
+        {b.duplicate && <div style={{ color: "red" }}>重複登録</div>}
+      </div>
+    ))}
+  </div>
 </div>
-```
+
 
 );
 }
