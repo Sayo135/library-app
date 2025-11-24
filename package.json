@@ -1,25 +1,25 @@
 {
-"name": "library-app",
-"version": "0.1.0",
-"private": true,
-"scripts": {
-"dev": "next dev",
-"build": "next build",
-"start": "next start",
-"lint": "next lint"
-},
-"dependencies": {
-"next": "^13.5.8",
-"react": "^18.2.0",
-"react-dom": "^18.2.0",
-"@supabase/supabase-js": "^2.83.0",
-"html5-qrcode": "^2.3.8"
-},
-"devDependencies": {
-"eslint": "^8.47.0",
-"eslint-config-next": "^13.5.8"
-},
-"engines": {
-"node": ">=18"
-}
+  "name": "library-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "13.5.11",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@supabase/supabase-js": "2.83.0",
+    "html5-qrcode": "2.3.8"
+  },
+  "devDependencies": {
+    "eslint": "8.47.0",
+    "eslint-config-next": "13.5.11"
+  },
+  "engines": {
+    "node": "18.x"
+  }
 }
