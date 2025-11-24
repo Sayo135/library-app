@@ -9,14 +9,14 @@ const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co";
 const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Supabase: books テーブル取得
+// Supabase: books取得
 async function fetchBooksFromSupabase() {
   const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
   if (error) return [];
   return data || [];
 }
 
-// Supabase: books テーブル保存（Upsert）
+// Supabase: books保存
 async function saveBooksToSupabase(books) {
   const rows = books.map((b) => ({
     isbn: b.isbn,
@@ -33,13 +33,13 @@ async function saveBooksToSupabase(books) {
   return !error;
 }
 
-// Supabase: books テーブル削除
+// Supabase: 個別削除
 async function deleteBookFromSupabase(isbn) {
   const { error } = await supabase.from("books").delete().eq("isbn", isbn);
   return !error;
 }
 
-// OpenBD から書誌情報取得
+// OpenBD 取得
 async function fetchOpenBD(isbn) {
   try {
     const res = await fetch("https://api.openbd.jp/v1/get?isbn=" + isbn);
@@ -59,7 +59,7 @@ async function fetchOpenBD(isbn) {
   }
 }
 
-// Wikidata から出版社・画像取得
+// Wikidata 取得
 async function fetchWikidata(isbn) {
   try {
     const query = `
@@ -85,7 +85,7 @@ async function fetchWikidata(isbn) {
   }
 }
 
-// APIを順に試す
+// API順に試す
 async function fetchBookInfo(isbn) {
   let info = await fetchOpenBD(isbn);
   const wd = await fetchWikidata(isbn);
@@ -97,12 +97,12 @@ async function fetchBookInfo(isbn) {
   return info;
 }
 
+// UI
 export default function Home() {
   const [isbn, setIsbn] = useState("");
   const [books, setBooks] = useState([]);
   const [scanning, setScanning] = useState(false);
   const [searchShelf, setSearchShelf] = useState("");
-  const [videoInputId, setVideoInputId] = useState(null);
   const videoRef = useRef(null);
   const codeReader = useRef(null);
   const beepRef = useRef(null);
@@ -110,13 +110,6 @@ export default function Home() {
   useEffect(() => {
     loadBooks();
     codeReader.current = new BrowserMultiFormatReader();
-
-    // 背面カメラを優先して選択
-    BrowserMultiFormatReader.listVideoInputDevices().then(devices => {
-      const backCamera = devices.find(d => d.label.toLowerCase().includes("back") || d.label.toLowerCase().includes("environment"));
-      setVideoInputId(backCamera?.deviceId || (devices[0] && devices[0].deviceId));
-    });
-
     return () => { stopScan(); };
   }, []);
 
@@ -126,23 +119,21 @@ export default function Home() {
   }
 
   async function startScan() {
-    if (scanning || !videoInputId) return;
+    if (scanning) return;
     setScanning(true);
     try {
-      await codeReader.current.decodeFromVideoDevice(
-        videoInputId,
-        videoRef.current,
-        result => {
-          if (result) {
-            const text = result.getText();
-            if (text.startsWith("978") && text.length === 13) {
-              setIsbn(text);
-              stopScan();
-              searchAndSave(text);
-            }
-          }
+      const videoDevices = await BrowserMultiFormatReader.listVideoInputDevices();
+      let deviceId = videoDevices.find(d => d.label.toLowerCase().includes("back"))?.deviceId || videoDevices[0]?.deviceId;
+      if (!deviceId) { alert("カメラが見つかりません"); setScanning(false); return; }
+
+      await codeReader.current.decodeFromVideoDevice(deviceId, videoRef.current, result => {
+        const text = result.getText();
+        if (text.startsWith("978") && text.length === 13) {
+          setIsbn(text);
+          stopScan();
+          searchAndSave(text);
         }
-      );
+      });
     } catch (err) {
       console.error(err);
       setScanning(false);
@@ -173,22 +164,18 @@ export default function Home() {
     const ok = await saveBooksToSupabase([newBook]);
     if (ok) {
       loadBooks();
-      if (exists) {
-        // ブザー音
-        beepRef.current.play();
-      } else {
-        // 初回はビープ音
-        beepRef.current.play();
-      }
+      if (exists) beepRef.current.play();
     } else {
       alert("保存に失敗しました");
     }
   }
 
   async function deleteBook(isbn) {
-    const ok = await deleteBookFromSupabase(isbn);
-    if (ok) loadBooks();
-    else alert("削除に失敗しました");
+    if (confirm("削除しますか？")) {
+      const ok = await deleteBookFromSupabase(isbn);
+      if (ok) loadBooks();
+      else alert("削除に失敗しました");
+    }
   }
 
   const filteredBooks = books.filter(b => !searchShelf || (b.shelf && b.shelf.includes(searchShelf)));
@@ -222,7 +209,7 @@ export default function Home() {
 
       <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
       {filteredBooks.map(b => (
-        <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black", border: "1px solid #ccc", padding: 10 }}>
+        <div key={b.isbn} style={{ marginBottom: 20, color: b.duplicate ? "red" : "black" }}>
           {b.image && <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} />}
           <div>ISBN: {b.isbn}</div>
           <div>タイトル: {b.title}</div>
