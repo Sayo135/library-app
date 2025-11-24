@@ -73,14 +73,16 @@ async function fetchGoogleBooks(isbn) {
   }
 }
 
-// Wikidata から書誌情報取得
+// Wikidata から書誌情報取得（出版社・画像も取得）
 async function fetchWikidata(isbn) {
   try {
     const query = `
-      SELECT ?item ?itemLabel ?authorLabel ?pubDate WHERE {
+      SELECT ?item ?itemLabel ?authorLabel ?pubDate ?publisherLabel ?cover WHERE {
         ?item wdt:P212 "${isbn}".
         OPTIONAL { ?item wdt:P50 ?author. ?author rdfs:label ?authorLabel FILTER(LANG(?authorLabel)="ja") }
         OPTIONAL { ?item wdt:P577 ?pubDate. }
+        OPTIONAL { ?item wdt:P123 ?publisher. ?publisher rdfs:label ?publisherLabel FILTER(LANG(?publisherLabel)="ja") }
+        OPTIONAL { ?item wdt:P18 ?cover. }
       }
       LIMIT 1
     `;
@@ -93,9 +95,9 @@ async function fetchWikidata(isbn) {
     return {
       title: b.itemLabel ? b.itemLabel.value : "",
       authors: b.authorLabel ? [b.authorLabel.value] : [],
-      publisher: "",
+      publisher: b.publisherLabel ? b.publisherLabel.value : "",
       pubdate: b.pubDate ? b.pubDate.value.split("T")[0] : "",
-      image: ""
+      image: b.cover ? b.cover.value : ""
     };
   } catch {
     return null;
@@ -141,9 +143,14 @@ export default function Home() {
       await codeReader.current.decodeFromConstraints(
         { video: { facingMode: "environment" } },
         videoElement,
-        result => {
+        async result => {
           if (result) {
-            setIsbn(result.getText());
+            const code = result.getText();
+            // 13桁で978から始まるISBNのみ
+            if (/^978\d{10}$/.test(code)) {
+              setIsbn(code);
+              await autoFetchAndSave(code); // 自動書誌取得
+            }
             stopScan();
           }
         }
@@ -160,12 +167,11 @@ export default function Home() {
     }
   }
 
-  async function searchAndSave() {
-    if (!isbn) return;
+  async function autoFetchAndSave(isbn) {
     const info = await fetchBookInfo(isbn);
     if (!info) { alert("書誌データが見つかりませんでした"); return; }
     const newBook = {
-      isbn: isbn,
+      isbn,
       title: info.title,
       authors: info.authors,
       publisher: info.publisher,
@@ -175,8 +181,13 @@ export default function Home() {
       created_at: new Date().toISOString()
     };
     const ok = await saveBooksToSupabase([newBook]);
-    if (ok) { alert("保存しました"); loadBooks(); } 
+    if (ok) { loadBooks(); } 
     else { alert("保存に失敗しました"); }
+  }
+
+  async function manualFetchAndSave() {
+    if (!isbn) return;
+    await autoFetchAndSave(isbn);
   }
 
   return (
@@ -197,7 +208,7 @@ export default function Home() {
         style={{ width: "100%", padding: 10, marginTop: 20 }}
       />
 
-      <button onClick={searchAndSave} style={{ width: "100%", padding: 10, marginTop: 10 }}>書誌取得して保存</button>
+      <button onClick={manualFetchAndSave} style={{ width: "100%", padding: 10, marginTop: 10 }}>書誌取得して保存</button>
 
       <h3 style={{ marginTop: 30 }}>保存済みの本</h3>
       {books.map(b => (
@@ -205,6 +216,8 @@ export default function Home() {
           <div>ISBN: {b.isbn}</div>
           <div>タイトル: {b.title}</div>
           <div>著者: {b.authors ? b.authors.join(", ") : ""}</div>
+          <div>出版社: {b.publisher}</div>
+          {b.image && <img src={b.image} alt={b.title} style={{ maxWidth: 100, marginTop: 5 }} />}
         </div>
       ))}
     </div>
