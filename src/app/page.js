@@ -2,37 +2,38 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from "next/navigation";
-import { Html5Qrcode } from 'html5-qrcode';
 import { createClient } from '@supabase/supabase-js';
+import dynamic from "next/dynamic";
+
+// html5-qrcode は SSR 回避
+const Html5Qrcode = dynamic(() => import('html5-qrcode').then(mod => mod.Html5Qrcode), { ssr: false });
 
 const supabaseUrl = 'https://sumqfcjvndnpuoirpkrb.supabase.co';
 const supabaseKey = 'sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- Supabase 関数など既存コードはそのまま ---
-async function fetchBooksFromSupabase() { /* ... */ }
-async function saveBooksToSupabase(books) { /* ... */ }
-async function fetchWikidata(isbn) { /* ... */ }
-async function fetchOpenBD(isbn) { /* ... */ }
-async function fetchOpenLibrary(isbn) { /* ... */ }
-async function fetchNDL(isbn) { /* ... */ }
-async function fetchBookInfo(isbn) { /* ... */ }
+// ----------------- Supabase 関数 -----------------
+async function fetchBooksFromSupabase() { /* 既存コード */ }
+async function saveBooksToSupabase(books) { /* 既存コード */ }
+async function fetchWikidata(isbn) { /* 既存コード */ }
+async function fetchOpenBD(isbn) { /* 既存コード */ }
+async function fetchOpenLibrary(isbn) { /* 既存コード */ }
+async function fetchNDL(isbn) { /* 既存コード */ }
+async function fetchBookInfo(isbn) { /* 既存コード */ }
 
-// ----------------- 認証チェック -----------------
+// ----------------- メインコンポーネント -----------------
 export default function BookScannerPage() {
   const router = useRouter();
 
+  // 認証チェック
   useEffect(() => {
     const loggedIn = sessionStorage.getItem("loggedIn");
-    if (!loggedIn) {
-      router.push("/login"); // 未ログイン時は /login にリダイレクト
-    }
+    if (!loggedIn) router.push("/login");
   }, []);
 
-  // 以下は既存の状態管理・スキャン処理
+  // 状態管理
   const [scanning, setScanning] = useState(false);
   const [isbnInput, setIsbnInput] = useState('');
-  const [shelfInput, setShelfInput] = useState('');
   const [books, setBooks] = useState([]);
   const [msg, setMsg] = useState('準備中…');
   const [searchText, setSearchText] = useState('');
@@ -42,7 +43,7 @@ export default function BookScannerPage() {
   const scannedISBNsRef = useRef(new Set());
   const videoStartedRef = useRef(false);
 
-  // Supabaseから初期データ取得
+  // クライアントサイドのみ処理
   useEffect(() => {
     (async () => {
       const data = await fetchBooksFromSupabase();
@@ -51,30 +52,57 @@ export default function BookScannerPage() {
     })();
   }, []);
 
-  // Supabaseへ保存
+  // Supabase保存
   useEffect(() => {
-    if (books.length > 0) {
-      saveBooksToSupabase(books);
-    }
+    if (books.length > 0) saveBooksToSupabase(books);
   }, [books]);
 
-  // Buzzer（AudioContext再利用 & async化）
-  const playBeep = () => { try { new Audio('/beep.mp3').play(); } catch(e){} };
-  const playBuzzer = () => { try { new Audio('/buzzer.mp3').play(); } catch(e){} };
+  // Audio & DOM 操作もクライアント内で
+  const playBeep = () => {
+    if (typeof window !== "undefined") {
+      try { new Audio('/beep.mp3').play(); } catch {}
+    }
+  };
+  const playBuzzer = () => {
+    if (typeof window !== "undefined") {
+      try { new Audio('/buzzer.mp3').play(); } catch {}
+    }
+  };
 
-  // ISBN ハンドリング
   async function handleISBN(isbn) { /* 既存コード */ }
 
-  // カメラスキャン開始/停止
-  async function startScan() { /* 既存コード */ }
-  async function stopScan() { /* 既存コード */ }
+  async function startScan() {
+    if (scanning || typeof window === "undefined") return;
+    setScanning(true);
 
-  // フィルタリング
+    const id = 'reader';
+    if (!html5QrcodeRef.current) {
+      html5QrcodeRef.current = new Html5Qrcode(id);
+    }
+
+    await html5QrcodeRef.current.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: 250 },
+      (decoded) => {
+        if (/^97[89]\d{10}$/.test(decoded)) handleISBN(decoded);
+      }
+    );
+    videoStartedRef.current = true;
+  }
+
+  async function stopScan() {
+    setScanning(false);
+    if (html5QrcodeRef.current && videoStartedRef.current) {
+      await html5QrcodeRef.current.stop();
+      videoStartedRef.current = false;
+    }
+  }
+
   function filteredBooks() { /* 既存コード */ }
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>蔵書スキャナー（OpenBD / OpenLibrary / NDL）</h1>
+      <h1>蔵書スキャナー（Netlify ビルド安全版）</h1>
       <p>{msg}</p>
 
       <div style={{ display: 'flex', gap: 12 }}>
@@ -91,9 +119,7 @@ export default function BookScannerPage() {
         style={{ width: 200 }}
       />
       <button
-        onClick={() => {
-          if (/^97[89]\d{10}$/.test(isbnInput)) handleISBN(isbnInput);
-        }}
+        onClick={() => { if (/^97[89]\d{10}$/.test(isbnInput)) handleISBN(isbnInput); }}
       >手動登録</button>
 
       <h2>検索（書名・著者・出版社・ISBN・棚）</h2>
