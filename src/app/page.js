@@ -13,7 +13,7 @@ const supabase = createClient(
 /* ---------------- util ---------------- */
 const isMobileDevice = () => {
   if (typeof window === "undefined") return false;
-  return window.matchMedia("(max-width: 767px)").matches;
+  return window.innerWidth < 768;
 };
 
 /* ========================================================= */
@@ -24,6 +24,7 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [filteredBooks, setFilteredBooks] = useState([]);
   const [recent, setRecent] = useState([]);
+
   const [isMobile, setIsMobile] = useState(false);
   const [lastIsbn, setLastIsbn] = useState("");
 
@@ -33,14 +34,9 @@ export default function Home() {
 
   /* ---------------- 初期化 ---------------- */
   useEffect(() => {
-    const detect = () => setIsMobile(isMobileDevice());
-    detect();
-    window.addEventListener("resize", detect);
-
+    setIsMobile(isMobileDevice());
     loadBooks();
     loadShelves();
-
-    return () => window.removeEventListener("resize", detect);
   }, []);
 
   /* ---------------- データ取得 ---------------- */
@@ -62,9 +58,11 @@ export default function Home() {
       .select("*")
       .order("created_at");
 
-    if (data && data.length) {
+    if (data) {
       setShelves(data);
-      if (!selectedShelf) setSelectedShelf(data[0].name);
+      if (!selectedShelf && data.length > 0) {
+        setSelectedShelf(data[0].name);
+      }
     }
   }
 
@@ -75,6 +73,7 @@ export default function Home() {
       const json = await res.json();
       const s = json?.[0]?.summary;
       if (!s) return null;
+
       return {
         title: s.title,
         authors: s.author?.split(" / ") ?? [],
@@ -96,8 +95,12 @@ export default function Home() {
     if (!info) return;
 
     const exists = books.some((b) => b.isbn === isbn);
-    (exists ? warnRef : beepRef).current?.play().catch(() => {});
-    if (!exists) navigator.vibrate?.(80);
+
+    if (exists) warnRef.current?.play().catch(() => {});
+    else {
+      beepRef.current?.play().catch(() => {});
+      navigator.vibrate?.(80);
+    }
 
     const { data } = await supabase
       .from("books")
@@ -109,7 +112,7 @@ export default function Home() {
           publisher: info.publisher,
           cover: info.cover,
           shelf: selectedShelf || "未設定",
-          shelf_no: "",
+          location: "", // 物理的な場所
         },
         { onConflict: "isbn" }
       )
@@ -125,6 +128,7 @@ export default function Home() {
   /* ---------------- カメラ ---------------- */
   async function startScan() {
     if (qrRef.current) return;
+
     qrRef.current = new Html5Qrcode("reader");
     await qrRef.current.start(
       { facingMode: "environment" },
@@ -140,7 +144,7 @@ export default function Home() {
     qrRef.current = null;
   }
 
-  /* ---------------- 更新・削除 ---------------- */
+  /* ---------------- 更新・削除（PC用） ---------------- */
   async function updateBook(isbn, patch) {
     const { data } = await supabase
       .from("books")
@@ -160,7 +164,7 @@ export default function Home() {
     setBooks((prev) => prev.filter((b) => b.isbn !== isbn));
   }
 
-  /* ---------------- 検索 ---------------- */
+  /* ---------------- 検索（PC） ---------------- */
   useEffect(() => {
     if (!search) setFilteredBooks(books);
     else {
@@ -171,7 +175,8 @@ export default function Home() {
             b.title.toLowerCase().includes(s) ||
             b.isbn.includes(s) ||
             b.authors.join(" ").toLowerCase().includes(s) ||
-            (b.shelf_no ?? "").includes(s)
+            (b.shelf ?? "").toLowerCase().includes(s) ||
+            (b.location ?? "").toLowerCase().includes(s)
         )
       );
     }
@@ -182,14 +187,15 @@ export default function Home() {
     <main style={{ padding: 16 }}>
       <h1>蔵書管理</h1>
 
-      <audio ref={beepRef} src="/beep.mp3" preload="auto" />
-      <audio ref={warnRef} src="/warn.mp3" preload="auto" />
+      <audio ref={beepRef} src="/beep.mp3" />
+      <audio ref={warnRef} src="/warn.mp3" />
 
       {isMobile ? (
         <MobileView startScan={startScan} stopScan={stopScan} recent={recent} />
       ) : (
         <DesktopView
           books={filteredBooks}
+          shelves={shelves || []}
           search={search}
           setSearch={setSearch}
           updateBook={updateBook}
@@ -200,6 +206,7 @@ export default function Home() {
   );
 }
 
+/* ========================================================= */
 /* ======================= Mobile ========================== */
 function MobileView({ startScan, stopScan, recent }) {
   return (
@@ -214,7 +221,7 @@ function MobileView({ startScan, stopScan, recent }) {
         <h2>🕒 直前3冊</h2>
         {recent.map((b) => (
           <div key={b.isbn}>
-            {b.title}（{b.isbn}）
+            {b.title} ({b.isbn})
           </div>
         ))}
       </section>
@@ -222,109 +229,77 @@ function MobileView({ startScan, stopScan, recent }) {
   );
 }
 
+/* ========================================================= */
 /* ======================= Desktop ========================= */
-function DesktopView({
-  books,
-  shelves,
-  search,
-  setSearch,
-  updateBook,
-  deleteBook,
-}) {
-  const [editingShelf, setEditingShelf] = useState(null);
-  const [tempShelf, setTempShelf] = useState("");
+function DesktopView({ books, shelves, search, setSearch, updateBook, deleteBook }) {
+  // 本棚ごとにグループ化
+  const grouped = {};
+  books.forEach((b) => {
+    const shelf = b.shelf || "未設定";
+    if (!grouped[shelf]) grouped[shelf] = [];
+    grouped[shelf].push(b);
+  });
 
   return (
     <>
       <section>
         <input
-          placeholder="検索（タイトル・ISBN・著者・本棚番号）"
+          placeholder="検索（タイトル・ISBN・著者・本棚・場所）"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: "100%", padding: 8 }}
         />
       </section>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, 160px)",
-          gap: 16,
-          marginTop: 16,
-        }}
-      >
-        {books.map((b) => (
+      {Object.keys(grouped).map((shelfName) => (
+        <section key={shelfName} style={{ marginTop: 20 }}>
+          <h3>{shelfName}</h3>
           <div
-            key={b.isbn}
-            style={{ border: "1px solid #ccc", padding: 8 }}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, 160px)",
+              gap: 16,
+            }}
           >
-            {b.cover && (
-              <img
-                src={b.cover}
-                alt={b.title}
-                style={{
-                  width: "100%",
-                  height: 220,
-                  objectFit: "cover",
-                }}
-              />
-            )}
-
-            <div style={{ fontWeight: "bold", marginTop: 4 }}>
-              {b.title}
-            </div>
-
-            <div style={{ fontSize: 12, color: "#555" }}>
-              本棚番号：{b.shelf_no || "未設定"}
-            </div>
-
-            {editingShelf === b.isbn ? (
-              <>
+            {grouped[shelfName].map((b) => (
+              <div key={b.isbn} style={{ border: "1px solid #ccc", padding: 8 }}>
+                {b.cover && (
+                  <img
+                    src={b.cover}
+                    alt={b.title}
+                    style={{ width: "100%", height: 220, objectFit: "cover" }}
+                  />
+                )}
                 <input
-                  placeholder="新しい本棚番号"
-                  value={tempShelf}
-                  onChange={(e) => setTempShelf(e.target.value)}
-                  style={{ width: "100%", marginTop: 6 }}
+                  value={b.title}
+                  onChange={(e) => updateBook(b.isbn, { title: e.target.value })}
+                  style={{ width: "100%" }}
                 />
-
-                <button
-                  onClick={() => {
-                    updateBook(b.isbn, { shelf_no: tempShelf });
-                    setEditingShelf(null);
-                  }}
-                  style={{ marginTop: 4, width: "100%" }}
+                <select
+                  value={b.shelf || "未設定"}
+                  onChange={(e) => updateBook(b.isbn, { shelf: e.target.value })}
+                  style={{ width: "100%", marginTop: 4 }}
                 >
-                  保存
+                  {(shelves || []).map((s) => (
+                    <option key={s.name} value={s.name}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  placeholder="場所"
+                  value={b.location ?? ""}
+                  onChange={(e) => updateBook(b.isbn, { location: e.target.value })}
+                  style={{ width: "100%", marginTop: 4 }}
+                />
+                <button onClick={() => deleteBook(b.isbn)} style={{ marginTop: 4 }}>
+                  削除
                 </button>
-
-                <button
-                  onClick={() => setEditingShelf(null)}
-                  style={{ marginTop: 2, width: "100%" }}
-                >
-                  キャンセル
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => {
-                  setEditingShelf(b.isbn);
-                  setTempShelf(b.shelf_no || "");
-                }}
-                style={{ marginTop: 6, width: "100%" }}
-              >
-                本棚変更
-              </button>
-            )}
-
-            <button
-              onClick={() => deleteBook(b.isbn)}
-              style={{ marginTop: 6, width: "100%" }}
-            >
-              削除
-            </button>
+              </div>
+            ))}
           </div>
-        ))}
-      </section>
+        </section>
+      ))}
     </>
   );
 }
