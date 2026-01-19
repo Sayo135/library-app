@@ -1,225 +1,291 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { BrowserMultiFormatReader } from "@zxing/browser";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { Html5Qrcode } from "html5-qrcode";
 
-// Supabase 設定
-const supabaseUrl = "https://sumqfcjvndnpuoirpkrb.supabase.co";
-const supabaseKey = "sb_publishable_z_PWS1V9c_Pf8dBTyyHAtA_d0HDKnJ6";
-const supabase = createClient(supabaseUrl, supabaseKey);
+/* ---------------- Supabase ---------------- */
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
-// Supabase: books テーブル取得
-async function fetchBooksFromSupabase() {
-  const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
-  if (error) return [];
-  return data || [];
-}
+/* ---------------- util ---------------- */
+const isMobileDevice = () => {
+  if (typeof window === "undefined") return false;
+  return window.innerWidth < 768;
+};
 
-// Supabase: books テーブル保存（Upsert）
-async function saveBooksToSupabase(book) {
-  const { error } = await supabase.from("books").insert([book]);
-  return !error;
-}
-
-// Supabase: books 更新
-async function updateBookInSupabase(book) {
-  const { error } = await supabase.from("books").update(book).eq("isbn", book.isbn).eq("created_at", book.created_at);
-  return !error;
-}
-
-// Supabase: 本削除
-async function deleteBookFromSupabase(id) {
-  const { error } = await supabase.from("books").delete().eq("id", id);
-  return !error;
-}
-
-// OpenBD から書誌情報取得
-async function fetchOpenBD(isbn) {
-  try {
-    const res = await fetch("https://api.openbd.jp/v1/get?isbn=" + isbn);
-    if (!res.ok) return null;
-    const j = await res.json();
-    if (!j || !j[0] || !j[0].summary) return null;
-    const s = j[0].summary;
-    return {
-      title: s.title || "",
-      authors: s.author ? s.author.split(",") : [],
-      publisher: s.publisher || "",
-      pubdate: s.pubdate || "",
-      image: s.cover || ""
-    };
-  } catch {
-    return null;
-  }
-}
-
-// Wikidata から出版社・画像取得
-async function fetchWikidata(isbn) {
-  try {
-    const query = `
-      SELECT ?item ?itemLabel ?publisher ?publisherLabel ?image WHERE {
-        ?item wdt:P212 "${isbn}" .
-        OPTIONAL { ?item wdt:P123 ?publisher. }
-        OPTIONAL { ?item wdt:P18 ?image. }
-        SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],ja". }
-      } LIMIT 1
-    `;
-    const url = "https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(query);
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const result = data.results.bindings[0];
-    if (!result) return null;
-    return {
-      publisher: result.publisherLabel?.value || "",
-      image: result.image?.value || ""
-    };
-  } catch {
-    return null;
-  }
-}
-
-// APIを順に試す
-async function fetchBookInfo(isbn) {
-  let info = await fetchOpenBD(isbn);
-  const wd = await fetchWikidata(isbn);
-  if (!info) info = { title: "", authors: [], publisher: "", pubdate: "", image: "" };
-  if (wd) {
-    if (wd.publisher) info.publisher = wd.publisher;
-    if (wd.image) info.image = wd.image;
-  }
-  return info;
-}
-
-// UI 本体
+/* ========================================================= */
 export default function Home() {
   const [books, setBooks] = useState([]);
-  const [searchShelf, setSearchShelf] = useState("");
-  const videoRef = useRef(null);
-  const codeReader = useRef(null);
-  const beepRef = useRef(null);
-  const buzzerRef = useRef(null);
+  const [shelves, setShelves] = useState([]);
+  const [selectedShelf, setSelectedShelf] = useState("");
+  const [search, setSearch] = useState("");
+  const [filteredBooks, setFilteredBooks] = useState([]);
+  const [recent, setRecent] = useState([]);
 
+  const [isMobile, setIsMobile] = useState(false);
+  const [lastIsbn, setLastIsbn] = useState("");
+
+  const qrRef = useRef(null);
+  const beepRef = useRef(null);
+  const warnRef = useRef(null);
+
+  /* ---------------- 初期化 ---------------- */
   useEffect(() => {
+    setIsMobile(isMobileDevice());
     loadBooks();
-    codeReader.current = new BrowserMultiFormatReader();
-    startScan();
-    return () => { stopScan(); };
+    loadShelves();
   }, []);
 
+  /* ---------------- データ取得 ---------------- */
   async function loadBooks() {
-    const data = await fetchBooksFromSupabase();
-    setBooks(data);
-  }
+    const { data } = await supabase
+      .from("books")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-  async function startScan() {
-    try {
-      const videoElement = videoRef.current;
-      if (!videoElement) return;
-      await codeReader.current.decodeFromVideoDevice(null, videoElement, async (result, err) => {
-        if (result) {
-          const isbn = result.getText();
-          if (isbn.startsWith("978") && isbn.length === 13) {
-            await handleScan(isbn);
-          }
-        }
-      });
-    } catch (err) {
-      console.error("カメラ起動失敗:", err);
-      alert("カメラの起動に失敗しました");
+    if (data) {
+      setBooks(data);
+      setFilteredBooks(data);
     }
   }
 
-  async function stopScan() {
-    if (codeReader.current) {
-      try { await codeReader.current.reset(); } catch {}
-    }
-  }
+  async function loadShelves() {
+    const { data } = await supabase
+      .from("shelves")
+      .select("*")
+      .order("created_at");
 
-  async function handleScan(isbn) {
-    const info = await fetchBookInfo(isbn);
-    const newBook = {
-      isbn,
-      title: info.title || "(書名なし)",
-      authors: info.authors.length ? info.authors : ["(著者なし)"],
-      publisher: info.publisher || "(出版社なし)",
-      pubdate: info.pubdate || "(出版日なし)",
-      image: info.image || "",
-      shelf: "",
-      duplicate: books.some(b => b.isbn === isbn),
-      created_at: new Date().toISOString()
-    };
-    const ok = await saveBooksToSupabase(newBook);
-    if (ok) {
-      setBooks(prev => [newBook, ...prev]);
-      if (newBook.duplicate) {
-        buzzerRef.current.load();
-        buzzerRef.current.play();
-      } else {
-        beepRef.current.load();
-        beepRef.current.play();
+    if (data) {
+      setShelves(data);
+      if (!selectedShelf && data.length > 0) {
+        setSelectedShelf(data[0].name);
       }
     }
   }
 
-  async function deleteBook(id) {
-    const ok = await deleteBookFromSupabase(id);
-    if (ok) loadBooks();
+  /* ---------------- OpenBD ---------------- */
+  async function fetchOpenBD(isbn) {
+    try {
+      const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${isbn}`);
+      const json = await res.json();
+      const s = json?.[0]?.summary;
+      if (!s) return null;
+
+      return {
+        title: s.title,
+        authors: s.author?.split(" / ") ?? [],
+        publisher: s.publisher,
+        cover: s.cover ?? "",
+      };
+    } catch {
+      return null;
+    }
   }
 
-  async function updateBook(book) {
-    const ok = await updateBookInSupabase(book);
-    if (ok) loadBooks();
+  /* ---------------- ISBN 検出 ---------------- */
+  async function handleDetectedIsbn(isbn) {
+    if (!/^978\d{10}$/.test(isbn)) return;
+    if (isbn === lastIsbn) return;
+    setLastIsbn(isbn);
+
+    const info = await fetchOpenBD(isbn);
+    if (!info) return;
+
+    const exists = books.some((b) => b.isbn === isbn);
+
+    if (exists) warnRef.current?.play().catch(() => {});
+    else {
+      beepRef.current?.play().catch(() => {});
+      navigator.vibrate?.(80);
+    }
+
+    const { data } = await supabase
+      .from("books")
+      .upsert(
+        {
+          isbn,
+          title: info.title || "(書名なし)",
+          authors: info.authors,
+          publisher: info.publisher,
+          cover: info.cover,
+          shelf: selectedShelf || "未設定",
+          shelf_no: "",
+        },
+        { onConflict: "isbn" }
+      )
+      .select()
+      .single();
+
+    if (data) {
+      setBooks((prev) => [data, ...prev.filter((b) => b.isbn !== data.isbn)]);
+      setRecent((prev) => [data, ...prev].slice(0, 3));
+    }
   }
 
-  const shelves = [...new Set(books.map(b => b.shelf || "未設定"))];
+  /* ---------------- カメラ ---------------- */
+  async function startScan() {
+    if (qrRef.current) return;
 
+    qrRef.current = new Html5Qrcode("reader");
+    await qrRef.current.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 250 },
+      (text) => handleDetectedIsbn(text.replace(/[^0-9]/g, ""))
+    );
+  }
+
+  async function stopScan() {
+    if (!qrRef.current) return;
+    await qrRef.current.stop();
+    qrRef.current.clear();
+    qrRef.current = null;
+  }
+
+  /* ---------------- 更新・削除（PC用） ---------------- */
+  async function updateBook(isbn, patch) {
+    const { data } = await supabase
+      .from("books")
+      .update(patch)
+      .eq("isbn", isbn)
+      .select()
+      .single();
+
+    if (data) {
+      setBooks((prev) => prev.map((b) => (b.isbn === isbn ? data : b)));
+    }
+  }
+
+  async function deleteBook(isbn) {
+    if (!confirm("この本を削除しますか？")) return;
+    await supabase.from("books").delete().eq("isbn", isbn);
+    setBooks((prev) => prev.filter((b) => b.isbn !== isbn));
+  }
+
+  /* ---------------- 検索（PC） ---------------- */
+  useEffect(() => {
+    if (!search) setFilteredBooks(books);
+    else {
+      const s = search.toLowerCase();
+      setFilteredBooks(
+        books.filter(
+          (b) =>
+            b.title.toLowerCase().includes(s) ||
+            b.isbn.includes(s) ||
+            b.authors.join(" ").toLowerCase().includes(s) ||
+            (b.shelf_no ?? "").includes(s)
+        )
+      );
+    }
+  }, [search, books]);
+
+  /* ========================================================= */
   return (
-    <div style={{ padding: 20 }}>
-      <audio ref={beepRef} src="/beep.mp3" preload="auto" />
-      <audio ref={buzzerRef} src="/buzzer.mp3" preload="auto" />
-      <h2>蔵書管理アプリ</h2>
+    <main style={{ padding: 16 }}>
+      <h1>蔵書管理</h1>
 
-      <div style={{ width: "100%", maxHeight: "40vh", overflow: "hidden", marginBottom: 10 }}>
-        <video ref={videoRef} style={{ width: "100%" }} />
-      </div>
+      <audio ref={beepRef} src="/beep.mp3" />
+      <audio ref={warnRef} src="/warn.mp3" />
 
-      <input
-        type="text"
-        placeholder="本棚検索"
-        value={searchShelf}
-        onChange={e => setSearchShelf(e.target.value)}
-        style={{ width: "100%", padding: 10, marginTop: 10 }}
-      />
+      {isMobile ? (
+        <MobileView
+          startScan={startScan}
+          stopScan={stopScan}
+          recent={recent}
+        />
+      ) : (
+        <DesktopView
+          books={filteredBooks}
+          shelves={shelves}
+          search={search}
+          setSearch={setSearch}
+          updateBook={updateBook}
+          deleteBook={deleteBook}
+        />
+      )}
+    </main>
+  );
+}
 
-      {shelves.filter(s => !searchShelf || s.includes(searchShelf)).map(shelf => (
-        <div key={shelf} style={{ marginTop: 20 }}>
-          <h3>{shelf}</h3>
-          {books.filter(b => (b.shelf || "未設定") === shelf).map(b => (
-            <div key={b.created_at} style={{ marginBottom: 15, color: b.duplicate ? "red" : "black", border: "1px solid #ccc", padding: 10 }}>
-              {b.image ? <img src={b.image} alt={b.title} style={{ maxWidth: 100, display: "block", marginBottom: 5 }} /> : <div>(書影なし)</div>}
-              <div>ISBN: {b.isbn}</div>
-              <div>
-                タイトル: <input value={b.title} onChange={e => b.title = e.target.value} onBlur={() => updateBook(b)} />
-              </div>
-              <div>
-                著者: <input value={b.authors.join(", ")} onChange={e => { b.authors = e.target.value.split(","); }} onBlur={() => updateBook(b)} />
-              </div>
-              <div>
-                出版社: <input value={b.publisher} onChange={e => b.publisher = e.target.value} onBlur={() => updateBook(b)} />
-              </div>
-              <div>
-                出版日: <input value={b.pubdate} onChange={e => b.pubdate = e.target.value} onBlur={() => updateBook(b)} />
-              </div>
-              <div>
-                本棚: <input value={b.shelf} onChange={e => b.shelf = e.target.value} onBlur={() => updateBook(b)} />
-              </div>
-              <button onClick={() => deleteBook(b.id)} style={{ marginTop: 5 }}>削除</button>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
+/* ========================================================= */
+/* ======================= Mobile ========================== */
+function MobileView({ startScan, stopScan, recent }) {
+  return (
+    <>
+      <section>
+        <button onClick={startScan}>📷 読み取り開始</button>
+        <button onClick={stopScan}>停止</button>
+        <div id="reader" style={{ width: "100%" }} />
+      </section>
+
+      <section>
+        <h2>🕒 直前3冊</h2>
+        {recent.map((b) => (
+          <div key={b.isbn}>
+            {b.title} ({b.isbn})
+          </div>
+        ))}
+      </section>
+    </>
+  );
+}
+
+/* ========================================================= */
+/* ======================= Desktop ========================= */
+function DesktopView({
+  books,
+  shelves,
+  search,
+  setSearch,
+  updateBook,
+  deleteBook,
+}) {
+  return (
+    <>
+      <section>
+        <input
+          placeholder="検索（タイトル・ISBN・著者・本棚番号）"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ width: "100%", padding: 8 }}
+        />
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, 160px)",
+          gap: 16,
+        }}
+      >
+        {books.map((b) => (
+          <div key={b.isbn} style={{ border: "1px solid #ccc", padding: 8 }}>
+            {b.cover && (
+              <img
+                src={b.cover}
+                alt={b.title}
+                style={{ width: "100%", height: 220, objectFit: "cover" }}
+              />
+            )}
+            <input
+              value={b.title}
+              onChange={(e) =>
+                updateBook(b.isbn, { title: e.target.value })
+              }
+            />
+            <input
+              placeholder="本棚番号"
+              value={b.shelf_no ?? ""}
+              onChange={(e) =>
+                updateBook(b.isbn, { shelf_no: e.target.value })
+              }
+            />
+            <button onClick={() => deleteBook(b.isbn)}>削除</button>
+          </div>
+        ))}
+      </section>
+    </>
   );
 }
