@@ -24,7 +24,4 @@
     "eslint": "8.47.0",
     "eslint-config-next": "13.5.11"
   },
-  "engines": {
-    "node": "18.x"
-  }
 }
